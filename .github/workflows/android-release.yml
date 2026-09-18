@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      - 'ci/**'
   workflow_dispatch:
 
 permissions:
@@ -103,6 +101,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body_path: RELEASE_NOTES.md
+          prerelease: true
           files: |
             alal-pdf-v0.1.0-beta.apk
             alal-pdf-v0.1.0-beta.apk.sha256

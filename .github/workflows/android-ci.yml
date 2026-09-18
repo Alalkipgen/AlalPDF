@@ -3,8 +3,7 @@ name: Android CI
 on:
   push:
     branches:
-      - feat/alal-pdf-mvp
-      - 'ci/**'
+      - main
   pull_request:
 
 permissions:
