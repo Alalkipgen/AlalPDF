@@ -6,6 +6,13 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 
-@Composable fun AlalPdfTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
+@Composable fun AlalPdfTheme(mode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> Unit) {
+    val darkTheme = when (mode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
     MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme(), content = content)
 }

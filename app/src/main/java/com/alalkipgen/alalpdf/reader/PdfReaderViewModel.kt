@@ -38,7 +38,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
-    fun load(uri: Uri, width: Int, initialPage: Int = 0) {
+    fun load(uri: Uri, width: Int, initialPage: Int = 0, nightMode: Boolean = false) {
         loadJob?.cancel()
         val currentGeneration = ++generation
         loadJob = viewModelScope.launch(Dispatchers.IO) {
@@ -47,7 +47,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 val count = repository.pageCount(uri)
                 ensureActive()
                 _uiState.value = PdfReaderUiState(isLoading = false, pageCount = count, pages = cache.snapshot())
-                if (count > 0) render(uri, initialPage.coerceIn(0, count - 1), width, currentGeneration)
+                if (count > 0) render(uri, initialPage.coerceIn(0, count - 1), width, currentGeneration, nightMode)
             }.onFailure {
                 if (it is kotlinx.coroutines.CancellationException) throw it
                 _uiState.value = PdfReaderUiState(isLoading = false, errorMessage = it.message ?: "Unable to open PDF")
@@ -55,14 +55,14 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
-    fun render(uri: Uri, pageIndex: Int, width: Int) = render(uri, pageIndex, width, generation)
+    fun render(uri: Uri, pageIndex: Int, width: Int, nightMode: Boolean = false) = render(uri, pageIndex, width, generation, nightMode)
 
-    private fun render(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int) {
+    private fun render(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int, nightMode: Boolean = false) {
         if (pageIndex !in 0 until _uiState.value.pageCount) return
         cache.get(pageIndex)?.let { _uiState.value = _uiState.value.copy(pages = _uiState.value.pages + (pageIndex to it)); return }
         renderJobs[pageIndex]?.cancel()
         renderJobs[pageIndex] = viewModelScope.launch(Dispatchers.IO) {
-            runCatching { repository.render(uri, pageIndex, width) }.onSuccess { bitmap ->
+            runCatching { repository.render(uri, pageIndex, width, nightMode) }.onSuccess { bitmap ->
                 if (expectedGeneration != generation || !isActive) { bitmap.recycle(); return@onSuccess }
                 cache.put(pageIndex, bitmap)
                 _uiState.value = _uiState.value.copy(isLoading = false, pages = _uiState.value.pages + (pageIndex to bitmap))

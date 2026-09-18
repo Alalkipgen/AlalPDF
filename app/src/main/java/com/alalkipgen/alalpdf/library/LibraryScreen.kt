@@ -18,11 +18,14 @@ import androidx.compose.ui.unit.dp
 import java.util.Locale
 
 @Composable
-fun LibraryScreen(state: LibraryUiState, onOpenPdf: () -> Unit, onOpenFolder: () -> Unit, onOpenDocument: (PdfDocument) -> Unit) {
+fun LibraryScreen(state: LibraryUiState, onOpenPdf: () -> Unit, onOpenFolder: () -> Unit, onThemeChange: (com.alalkipgen.alalpdf.ui.theme.ThemeMode) -> Unit = {}, onOpenDocument: (PdfDocument) -> Unit) {
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Alal PDF", style = MaterialTheme.typography.headlineMedium)
         Button(onClick = onOpenPdf, modifier = Modifier.fillMaxWidth()) { Text("Open PDF") }
         Button(onClick = onOpenFolder, modifier = Modifier.fillMaxWidth()) { Text("Choose PDF folder") }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            com.alalkipgen.alalpdf.ui.theme.ThemeMode.values().forEach { mode -> TextButton(onClick = { onThemeChange(mode) }) { Text(mode.name.lowercase().replaceFirstChar(Char::uppercase)) } }
+        }
         when {
             state.isLoading -> CircularProgressIndicator()
             state.errorMessage != null -> Text(state.errorMessage, color = MaterialTheme.colorScheme.error)

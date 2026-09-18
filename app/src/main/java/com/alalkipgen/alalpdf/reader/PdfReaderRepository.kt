@@ -14,8 +14,8 @@ class PdfReaderRepository(private val resolver: ContentResolver) {
         rendererMutex.withLock { open(uri).use { it.pageCount } }
     }
 
-    suspend fun render(uri: Uri, pageIndex: Int, width: Int): Bitmap = withContext(Dispatchers.IO) {
-        rendererMutex.withLock { open(uri).use { it.renderPage(pageIndex, width) } }
+    suspend fun render(uri: Uri, pageIndex: Int, width: Int, nightMode: Boolean = false): Bitmap = withContext(Dispatchers.IO) {
+        rendererMutex.withLock { open(uri).use { it.renderPage(pageIndex, width, nightMode) } }
     }
 
     private fun open(uri: Uri): PdfRendererSource {

@@ -12,7 +12,7 @@ class PdfRendererSource private constructor(
 ) : Closeable {
     val pageCount: Int get() = renderer.pageCount
 
-    fun renderPage(pageIndex: Int, width: Int): Bitmap {
+    fun renderPage(pageIndex: Int, width: Int, nightMode: Boolean = false): Bitmap {
         require(pageIndex in 0 until renderer.pageCount)
         require(width > 0)
         renderer.openPage(pageIndex).use { page ->
@@ -20,6 +20,15 @@ class PdfRendererSource private constructor(
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(Color.WHITE)
             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            if (nightMode) {
+                val pixels = IntArray(width * height)
+                bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+                pixels.indices.forEach { index ->
+                    val color = pixels[index]
+                    pixels[index] = Color.rgb(255 - Color.red(color), 255 - Color.green(color), 255 - Color.blue(color))
+                }
+                bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+            }
             return bitmap
         }
     }
