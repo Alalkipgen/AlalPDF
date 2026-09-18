@@ -38,7 +38,11 @@ class MainActivity : ComponentActivity() {
     var selectedUri by rememberSaveable { mutableStateOf<String?>(null) }
     androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.loadRecent() }
     val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { repository.persistReadPermission(it); viewModel.openDocument(it) }
+        uri?.let {
+            repository.persistReadPermission(it)
+            viewModel.openDocument(it)
+            selectedUri = it.toString()
+        }
     }
     val folderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let { repository.persistReadPermission(it); viewModel.openFolder(it) }
@@ -57,6 +61,6 @@ class MainActivity : ComponentActivity() {
         }
         val width = with(LocalDensity.current) { (LocalConfiguration.current.screenWidthDp.dp - 16.dp).roundToPx().coerceAtLeast(1) }
         androidx.compose.runtime.LaunchedEffect(uri) { readerViewModel.load(uri, width, progressStore.page(uri)) }
-        PdfReaderScreen(uri, readerState, initialPage = progressStore.page(uri)) { page -> progressStore.save(uri, page); readerViewModel.render(uri, page, width) }
+        PdfReaderScreen(readerState, initialPage = progressStore.page(uri)) { page -> progressStore.save(uri, page); readerViewModel.render(uri, page, width) }
     }
 }

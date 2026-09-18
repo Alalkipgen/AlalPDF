@@ -1,6 +1,5 @@
 package com.alalkipgen.alalpdf.reader
 
-import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -28,7 +27,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun PdfReaderScreen(uri: Uri, state: PdfReaderUiState, initialPage: Int = 0, onRender: (Int) -> Unit) {
+fun PdfReaderScreen(state: PdfReaderUiState, initialPage: Int = 0, onRender: (Int) -> Unit) {
     Box(Modifier.fillMaxSize()) {
         when {
             state.errorMessage != null -> Text(state.errorMessage, Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.error)
