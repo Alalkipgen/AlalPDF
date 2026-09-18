@@ -59,13 +59,18 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
     private fun render(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int, nightMode: Boolean = false) {
         if (pageIndex !in 0 until _uiState.value.pageCount) return
-        cache.get(pageIndex)?.let { _uiState.value = _uiState.value.copy(pages = _uiState.value.pages + (pageIndex to it)); return }
+        if (cache.get(pageIndex) != null) {
+            // Publishing the snapshot keeps evicted pages out of the UI state so
+            // they are re-rendered on demand instead of being drawn after eviction.
+            _uiState.value = _uiState.value.copy(pages = cache.snapshot())
+            return
+        }
         renderJobs[pageIndex]?.cancel()
         renderJobs[pageIndex] = viewModelScope.launch(Dispatchers.IO) {
             runCatching { repository.render(uri, pageIndex, width, nightMode) }.onSuccess { bitmap ->
-                if (expectedGeneration != generation || !isActive) { bitmap.recycle(); return@onSuccess }
+                if (expectedGeneration != generation || !isActive) return@onSuccess
                 cache.put(pageIndex, bitmap)
-                _uiState.value = _uiState.value.copy(isLoading = false, pages = _uiState.value.pages + (pageIndex to bitmap))
+                _uiState.value = _uiState.value.copy(isLoading = false, pages = cache.snapshot())
             }.onFailure {
                 if (it is kotlinx.coroutines.CancellationException) throw it
                 _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = it.message ?: "Unable to render page")
