@@ -296,9 +296,9 @@ private fun ReaderRoute(
             onPageSelected = { page ->
                 currentPage = page
                 scope.launch { progressStore.save(uri, page) }
-                readerViewModel.render(uri, page, width, nightMode)
+                readerViewModel.renderWindow(uri, page, width, nightMode)
             },
-            onRender = { page -> readerViewModel.render(uri, page, width, nightMode) },
+            onRender = { page -> readerViewModel.renderWindow(uri, page, width, nightMode) },
         )
         if (showBookmarks) {
             BackHandler { showBookmarks = false }
