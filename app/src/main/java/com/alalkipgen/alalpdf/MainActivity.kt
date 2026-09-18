@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity() {
         LibraryScreen(state, { pdfLauncher.launch(arrayOf("application/pdf")) }, { folderLauncher.launch(null) }) { selectedUri = it.uri.toString() }
     } else {
         val readerViewModel: PdfReaderViewModel = viewModel(factory = PdfReaderViewModel.Factory(PdfReaderRepository(contentResolver)))
+        readerViewModel.initialize(androidx.compose.ui.platform.LocalContext.current.applicationContext)
         val readerState by readerViewModel.uiState.collectAsState()
         val uri = android.net.Uri.parse(selectedUri)
         if (!repository.hasPersistedReadPermission(uri)) {
