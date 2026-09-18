@@ -1,14 +1,22 @@
 package com.alalkipgen.alalpdf.reader
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +27,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -31,6 +41,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -43,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -59,7 +71,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,6 +95,7 @@ fun PdfReaderScreen(
     onBack: () -> Unit,
     onNightModeChange: (Boolean) -> Unit,
     onShare: () -> Unit,
+    onPrint: () -> Unit = {},
     onOpenBookmarks: () -> Unit,
     onAddBookmark: () -> Unit,
     onPageSelected: (Int) -> Unit,
@@ -87,6 +103,10 @@ fun PdfReaderScreen(
 ) {
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage.coerceAtLeast(0))
     val haptics = LocalHapticFeedback.current
+    val view = LocalView.current
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+
     var jumpOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var jumpText by remember { mutableStateOf("") }
@@ -94,6 +114,13 @@ fun PdfReaderScreen(
     var showPill by remember { mutableStateOf(false) }
     var dragging by remember { mutableStateOf(false) }
     var sliderValue by remember { mutableFloatStateOf(initialPage.toFloat()) }
+
+    var keepScreenOn by remember { mutableStateOf(true) }
+    var lockRotation by remember { mutableStateOf(false) }
+    var fullScreen by remember { mutableStateOf(false) }
+    var thumbsOpen by remember { mutableStateOf(false) }
+    var autoScroll by remember { mutableStateOf(false) }
+    var autoSpeed by remember { mutableFloatStateOf(2.5f) }
 
     // One zoom/pan state for the whole document, so the scale no longer resets
     // every time a different page scrolls into view.
@@ -104,6 +131,30 @@ fun PdfReaderScreen(
     // of scroll, which makes long documents noticeably smoother.
     val visiblePage by remember { derivedStateOf { listState.firstVisibleItemIndex } }
     val lastIndex = (state.pageCount - 1).coerceAtLeast(0)
+
+    DisposableEffect(keepScreenOn) {
+        view.keepScreenOn = keepScreenOn
+        onDispose { view.keepScreenOn = false }
+    }
+    DisposableEffect(lockRotation, activity) {
+        activity?.requestedOrientation = if (lockRotation) {
+            ActivityInfo.SCREEN_ORIENTATION_LOCKED
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+    }
+    DisposableEffect(fullScreen, activity) {
+        val window = activity?.window
+        if (window != null) {
+            if (fullScreen) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            }
+        }
+        onDispose { window?.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN) }
+    }
 
     LaunchedEffect(requestedPage) {
         requestedPage?.let {
@@ -135,103 +186,207 @@ fun PdfReaderScreen(
             }
         }
     }
+    LaunchedEffect(autoScroll, autoSpeed) {
+        while (autoScroll) {
+            listState.scrollBy(autoSpeed)
+            delay(16)
+        }
+    }
+
+    if (thumbsOpen) {
+        BackHandler { thumbsOpen = false }
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize()) {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { thumbsOpen = false }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close")
+                        }
+                    },
+                    title = { Text("Pages") },
+                )
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(110.dp),
+                    contentPadding = PaddingValues(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(state.pageCount) { index ->
+                        val bitmap = state.pages[index]
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Surface(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(150.dp)
+                                    .clickable {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        requestedPage = index
+                                        thumbsOpen = false
+                                    },
+                                tonalElevation = 2.dp,
+                            ) {
+                                if (bitmap != null) {
+                                    Image(
+                                        bitmap = bitmap.asImageBitmap(),
+                                        contentDescription = "Page " + (index + 1),
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Fit,
+                                    )
+                                } else {
+                                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        Text((index + 1).toString(), style = MaterialTheme.typography.titleMedium)
+                                    }
+                                }
+                            }
+                            Text((index + 1).toString(), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                title = {
-                    Column {
-                        Text(
-                            title,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (state.pageCount > 0) {
+            if (!fullScreen) {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    title = {
+                        Column {
                             Text(
-                                "Page ${visiblePage + 1} of ${state.pageCount}",
-                                style = MaterialTheme.typography.bodySmall,
+                                title,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (state.pageCount > 0) {
+                                Text(
+                                    "Page " + (visiblePage + 1) + " of " + state.pageCount,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onNightModeChange(!nightMode)
+                            },
+                            colors = if (nightMode) {
+                                IconButtonDefaults.filledTonalIconButtonColors()
+                            } else {
+                                IconButtonDefaults.iconButtonColors()
+                            },
+                        ) {
+                            Icon(
+                                if (nightMode) Icons.Default.LightMode else Icons.Default.DarkMode,
+                                contentDescription = "Night mode",
                             )
                         }
-                    }
-                },
-                actions = {
-                    IconButton(
-                        onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onNightModeChange(!nightMode)
-                        },
-                        colors = if (nightMode) {
-                            IconButtonDefaults.filledTonalIconButtonColors()
-                        } else {
-                            IconButtonDefaults.iconButtonColors()
-                        },
-                    ) {
-                        Icon(
-                            if (nightMode) Icons.Default.LightMode else Icons.Default.DarkMode,
-                            contentDescription = "Night mode",
-                        )
-                    }
-                    IconButton(onClick = onShare) {
-                        Icon(Icons.Default.Share, contentDescription = "Share")
-                    }
-                    Box {
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                        IconButton(onClick = onShare) {
+                            Icon(Icons.Default.Share, contentDescription = "Share")
                         }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = { Text("Go to page") },
-                                onClick = { menuOpen = false; jumpText = ""; jumpOpen = true },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Bookmarks") },
-                                onClick = { menuOpen = false; onOpenBookmarks() },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Add bookmark") },
-                                onClick = {
-                                    menuOpen = false
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onAddBookmark()
-                                },
-                            )
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "More")
+                            }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Go to page") },
+                                    onClick = { menuOpen = false; jumpText = ""; jumpOpen = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Page thumbnails") },
+                                    onClick = { menuOpen = false; thumbsOpen = true },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Bookmarks") },
+                                    onClick = { menuOpen = false; onOpenBookmarks() },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Add bookmark") },
+                                    onClick = {
+                                        menuOpen = false
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onAddBookmark()
+                                    },
+                                )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("Print") },
+                                    onClick = { menuOpen = false; onPrint() },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (autoScroll) "Stop auto-scroll" else "Auto-scroll") },
+                                    onClick = { menuOpen = false; autoScroll = !autoScroll },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (fullScreen) "Exit full screen" else "Full screen") },
+                                    onClick = { menuOpen = false; fullScreen = !fullScreen },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text((if (lockRotation) "\u2713 " else "") + "Lock rotation") },
+                                    onClick = { menuOpen = false; lockRotation = !lockRotation },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text((if (keepScreenOn) "\u2713 " else "") + "Keep screen on") },
+                                    onClick = { menuOpen = false; keepScreenOn = !keepScreenOn },
+                                )
+                            }
                         }
-                    }
-                },
-            )
+                    },
+                )
+            }
         },
         bottomBar = {
-            if (state.pageCount > 1) {
+            if (!fullScreen && state.pageCount > 1) {
                 Surface(tonalElevation = 3.dp) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("1", style = MaterialTheme.typography.labelSmall)
-                        Slider(
-                            value = sliderValue.coerceIn(0f, lastIndex.toFloat()),
-                            onValueChange = { value ->
-                                if (value.roundToInt() != sliderValue.roundToInt()) {
-                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                }
-                                dragging = true
-                                sliderValue = value
-                            },
-                            onValueChangeFinished = {
-                                dragging = false
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                requestedPage = sliderValue.roundToInt()
-                            },
-                            valueRange = 0f..lastIndex.toFloat(),
-                            modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                        )
-                        Text("${state.pageCount}", style = MaterialTheme.typography.labelSmall)
+                    Column {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("1", style = MaterialTheme.typography.labelSmall)
+                            Slider(
+                                value = sliderValue.coerceIn(0f, lastIndex.toFloat()),
+                                onValueChange = { value ->
+                                    if (value.roundToInt() != sliderValue.roundToInt()) {
+                                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    }
+                                    dragging = true
+                                    sliderValue = value
+                                },
+                                onValueChangeFinished = {
+                                    dragging = false
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    requestedPage = sliderValue.roundToInt()
+                                },
+                                valueRange = 0f..lastIndex.toFloat(),
+                                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                            )
+                            Text(state.pageCount.toString(), style = MaterialTheme.typography.labelSmall)
+                        }
+                        if (autoScroll) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Speed", style = MaterialTheme.typography.labelSmall)
+                                Slider(
+                                    value = autoSpeed,
+                                    onValueChange = { autoSpeed = it },
+                                    valueRange = 0.5f..15f,
+                                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                                )
+                                TextButton(onClick = { autoScroll = false }) { Text("Stop") }
+                            }
+                        }
                     }
                 }
             }
@@ -325,7 +480,7 @@ fun PdfReaderScreen(
                                     if (bitmap != null) {
                                         Image(
                                             bitmap = bitmap.asImageBitmap(),
-                                            contentDescription = "Page ${index + 1}",
+                                            contentDescription = "Page " + (index + 1),
                                             modifier = Modifier.fillMaxWidth(),
                                         )
                                     } else {
@@ -345,6 +500,10 @@ fun PdfReaderScreen(
                 }
             }
 
+            if (fullScreen) {
+                BackHandler { fullScreen = false }
+            }
+
             AnimatedVisibility(
                 visible = showPill && state.pageCount > 0,
                 enter = fadeIn(),
@@ -356,7 +515,7 @@ fun PdfReaderScreen(
                     color = MaterialTheme.colorScheme.inverseSurface,
                 ) {
                     Text(
-                        "${visiblePage + 1} / ${state.pageCount}",
+                        (visiblePage + 1).toString() + " / " + state.pageCount,
                         Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         color = MaterialTheme.colorScheme.inverseOnSurface,
                         style = MaterialTheme.typography.labelLarge,
@@ -372,7 +531,7 @@ fun PdfReaderScreen(
                         OutlinedTextField(
                             value = jumpText,
                             onValueChange = { input -> jumpText = input.filter(Char::isDigit) },
-                            label = { Text("Page number (1 - ${state.pageCount})") },
+                            label = { Text("Page number (1 - " + state.pageCount + ")") },
                             singleLine = true,
                         )
                     },
@@ -387,4 +546,13 @@ fun PdfReaderScreen(
             }
         }
     }
+}
+
+private fun Context.findActivity(): Activity? {
+    var current: Context = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
 }

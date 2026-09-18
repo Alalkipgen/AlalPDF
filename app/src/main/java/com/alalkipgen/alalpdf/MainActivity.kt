@@ -1,8 +1,11 @@
 package com.alalkipgen.alalpdf
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -30,11 +33,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.alalkipgen.alalpdf.create.CreatePdfScreen
 import com.alalkipgen.alalpdf.data.AlalPdfDatabase
 import com.alalkipgen.alalpdf.data.AlalPdfRepository
+import com.alalkipgen.alalpdf.library.DeviceScanRepository
 import com.alalkipgen.alalpdf.library.FolderBrowserRoute
+import com.alalkipgen.alalpdf.library.LibraryPrefs
 import com.alalkipgen.alalpdf.library.LibraryScreen
 import com.alalkipgen.alalpdf.library.LibraryViewModel
 import com.alalkipgen.alalpdf.library.PdfLibraryRepository
 import com.alalkipgen.alalpdf.library.RecentDocumentsStore
+import com.alalkipgen.alalpdf.reader.PdfPrinter
 import com.alalkipgen.alalpdf.reader.PdfReaderRepository
 import com.alalkipgen.alalpdf.reader.PdfReaderScreen
 import com.alalkipgen.alalpdf.reader.PdfReaderViewModel
@@ -94,9 +100,13 @@ private fun AppRoot(
     val context = LocalContext.current
     val appContext = context.applicationContext
     val libraryRepository = remember(appContext) { PdfLibraryRepository(appContext) }
+    val deviceScan = remember(appContext) { DeviceScanRepository(appContext) }
+    val prefs = remember(appContext) { LibraryPrefs(appContext) }
     val dataRepository = remember(appContext) { AlalPdfRepository(AlalPdfDatabase.create(appContext).dao()) }
     val recentStore = remember(dataRepository) { RecentDocumentsStore(dataRepository) }
-    val viewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory(libraryRepository, recentStore))
+    val viewModel: LibraryViewModel = viewModel(
+        factory = LibraryViewModel.Factory(libraryRepository, recentStore, prefs, deviceScan)
+    )
     val state by viewModel.uiState.collectAsState()
 
     var screen by rememberSaveable { mutableStateOf(SCREEN_LIBRARY) }
@@ -127,6 +137,30 @@ private fun AppRoot(
             libraryRepository.persistReadPermission(it)
             folderUri = it.toString()
             screen = SCREEN_FOLDER
+        }
+    }
+    val allFilesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (deviceScan.hasStorageAccess()) viewModel.scanDevice()
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) viewModel.scanDevice()
+    }
+
+    fun requestDeviceScan() {
+        when {
+            deviceScan.hasStorageAccess() -> viewModel.scanDevice()
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
+                val settings = Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:" + appContext.packageName),
+                )
+                runCatching { allFilesLauncher.launch(settings) }.onFailure {
+                    runCatching {
+                        allFilesLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                    }
+                }
+            }
+            else -> permissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
     }
 
@@ -161,6 +195,7 @@ private fun AppRoot(
                 uri = Uri.parse(current),
                 libraryRepository = libraryRepository,
                 dataRepository = dataRepository,
+                prefs = prefs,
                 onBack = { screen = SCREEN_LIBRARY; selectedUri = null },
             )
         }
@@ -169,19 +204,32 @@ private fun AppRoot(
             currentTheme = currentTheme,
             onOpenPdf = { pdfLauncher.launch(arrayOf("application/pdf")) },
             onOpenFolder = { folderLauncher.launch(null) },
+            onScanDevice = { requestDeviceScan() },
             onCreatePdf = { screen = SCREEN_CREATE },
             onThemeChange = onThemeChange,
+            onSortChange = viewModel::setSort,
             onOpenDocument = { document ->
                 viewModel.remember(document)
                 selectedUri = document.uri.toString()
                 screen = SCREEN_READER
             },
+            onToggleFavorite = viewModel::toggleFavorite,
+            onRemoveFromList = viewModel::removeFromList,
+            onClearList = viewModel::clearList,
+            onDelete = viewModel::delete,
+            onRename = { document, newName -> viewModel.rename(document, newName) },
         )
     }
 }
 
 @Composable
-private fun ReaderRoute(uri: Uri, libraryRepository: PdfLibraryRepository, dataRepository: AlalPdfRepository, onBack: () -> Unit) {
+private fun ReaderRoute(
+    uri: Uri,
+    libraryRepository: PdfLibraryRepository,
+    dataRepository: AlalPdfRepository,
+    prefs: LibraryPrefs,
+    onBack: () -> Unit,
+) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val scope = rememberCoroutineScope()
@@ -218,6 +266,9 @@ private fun ReaderRoute(uri: Uri, libraryRepository: PdfLibraryRepository, dataR
         initialPage = page
         readerViewModel.load(uri, width, page, nightMode)
     }
+    LaunchedEffect(readerState.pageCount) {
+        if (readerState.pageCount > 0) prefs.setPageCount(uri.toString(), readerState.pageCount)
+    }
 
     initialPage?.let { startPage ->
         BackHandler(enabled = !showBookmarks) { onBack() }
@@ -231,12 +282,15 @@ private fun ReaderRoute(uri: Uri, libraryRepository: PdfLibraryRepository, dataR
             onBack = onBack,
             onNightModeChange = { nightMode = it; readerViewModel.load(uri, width, currentPage, nightMode = it) },
             onShare = {
-                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                    type = "application/pdf"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }, "Share PDF"))
+                runCatching {
+                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                        type = "application/pdf"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }, "Share PDF"))
+                }
             },
+            onPrint = { PdfPrinter.print(context, uri, title) },
             onOpenBookmarks = { showBookmarks = true },
             onAddBookmark = { bookmarksViewModel.add(currentPage) },
             onPageSelected = { page ->
