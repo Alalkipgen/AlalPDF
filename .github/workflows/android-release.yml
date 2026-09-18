@@ -2,6 +2,8 @@ name: Android Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -71,7 +73,7 @@ jobs:
       - name: Upload release build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: alal-pdf-${{ github.ref_name }}
+          name: alal-pdf-${{ github.ref_name }}-${{ github.run_number }}
           path: |
             alal-pdf-${{ github.ref_name }}.apk
             alal-pdf-${{ github.ref_name }}.apk.sha256
