@@ -12,54 +12,74 @@ import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+
+/** Everything the user configured on the create screen. */
+data class PdfSpec(
+    val mode: CreatePdfMode,
+    val title: String = "",
+    val body: String = "",
+    val images: List<Uri> = emptyList(),
+    val scan: Bitmap? = null,
+)
 
 class CreatePdfRepository(private val resolver: ContentResolver) {
     private val pageWidth = 595
     private val pageHeight = 842
     private val margin = 48f
 
-    suspend fun writeText(output: Uri, title: String, body: String) = withContext(Dispatchers.IO) {
-        writeDocument(output) { document -> addTextPages(document, title, body, 1) }
+    /** Builds the PDF into the app cache so it can be previewed before saving. */
+    suspend fun buildPreview(cacheDir: File, spec: PdfSpec): File = withContext(Dispatchers.IO) {
+        validate(spec)
+        val target = File(cacheDir, "alal-preview-" + System.currentTimeMillis() + ".pdf")
+        val document = PdfDocument()
+        try {
+            build(document, spec)
+            FileOutputStream(target).use(document::writeTo)
+        } finally {
+            document.close()
+        }
+        target
     }
 
-    suspend fun writeImages(output: Uri, images: List<Uri>) = withContext(Dispatchers.IO) {
-        require(images.isNotEmpty()) { "Choose at least one image" }
-        writeDocument(output) { document ->
-            images.forEachIndexed { index, uri ->
-                decode(uri)?.let { bitmap ->
-                    addImagePage(document, bitmap, index + 1)
-                    bitmap.recycle()
-                }
-            }
+    /** Copies an already built preview file into the location the user picked. */
+    suspend fun save(source: File, output: Uri) = withContext(Dispatchers.IO) {
+        val stream = resolver.openOutputStream(output, "w") ?: error("Unable to create output file")
+        stream.use { out -> FileInputStream(source).use { input -> input.copyTo(out) } }
+    }
+
+    private fun validate(spec: PdfSpec) {
+        when (spec.mode) {
+            CreatePdfMode.TEXT -> require(spec.title.isNotBlank() || spec.body.isNotBlank()) { "Enter text first" }
+            CreatePdfMode.IMAGES -> require(spec.images.isNotEmpty()) { "Choose at least one image" }
+            CreatePdfMode.IMAGE_TEXT -> require(spec.images.isNotEmpty()) { "Choose at least one image" }
+            CreatePdfMode.SCAN -> requireNotNull(spec.scan) { "Capture a scan first" }
         }
     }
 
-    suspend fun writeImageAndText(output: Uri, title: String, body: String, images: List<Uri>) =
-        withContext(Dispatchers.IO) {
-            require(images.isNotEmpty()) { "Choose at least one image" }
-            writeDocument(output) { document ->
-                var page = addTextPages(document, title, body, 1)
-                images.forEach { uri ->
+    private fun build(document: PdfDocument, spec: PdfSpec) {
+        when (spec.mode) {
+            CreatePdfMode.TEXT -> addTextPages(document, spec.title, spec.body, 1)
+            CreatePdfMode.IMAGES -> {
+                spec.images.forEachIndexed { index, uri ->
+                    decode(uri)?.let { bitmap ->
+                        addImagePage(document, bitmap, index + 1)
+                        bitmap.recycle()
+                    }
+                }
+            }
+            CreatePdfMode.IMAGE_TEXT -> {
+                var page = addTextPages(document, spec.title, spec.body, 1)
+                spec.images.forEach { uri ->
                     decode(uri)?.let { bitmap ->
                         addImagePage(document, bitmap, page++)
                         bitmap.recycle()
                     }
                 }
             }
-        }
-
-    suspend fun writeScan(output: Uri, bitmap: Bitmap) = withContext(Dispatchers.IO) {
-        writeDocument(output) { document -> addImagePage(document, bitmap, 1) }
-    }
-
-    private fun writeDocument(output: Uri, build: (PdfDocument) -> Unit) {
-        val document = PdfDocument()
-        try {
-            build(document)
-            resolver.openOutputStream(output, "w")?.use(document::writeTo)
-                ?: error("Unable to create output file")
-        } finally {
-            document.close()
+            CreatePdfMode.SCAN -> addImagePage(document, requireNotNull(spec.scan), 1)
         }
     }
 

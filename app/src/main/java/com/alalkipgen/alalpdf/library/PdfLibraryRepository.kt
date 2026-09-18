@@ -8,6 +8,7 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.ArrayDeque
 
 class PdfLibraryRepository(private val context: Context) {
@@ -88,7 +89,35 @@ class PdfLibraryRepository(private val context: Context) {
         }
     }
 
+    suspend fun delete(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        when {
+            uri.scheme == "file" -> uri.path?.let { File(it).delete() } ?: false
+            DocumentsContract.isDocumentUri(context, uri) ->
+                runCatching { DocumentsContract.deleteDocument(resolver, uri) }.getOrDefault(false)
+            else -> runCatching { resolver.delete(uri, null, null) > 0 }.getOrDefault(false)
+        }
+    }
+
+    suspend fun rename(uri: Uri, newName: String): Uri? = withContext(Dispatchers.IO) {
+        val safeName = if (newName.endsWith(".pdf", ignoreCase = true)) newName else "$newName.pdf"
+        when {
+            uri.scheme == "file" -> {
+                val source = uri.path?.let { File(it) } ?: return@withContext null
+                val target = File(source.parentFile, safeName)
+                if (source.renameTo(target)) Uri.fromFile(target) else null
+            }
+            DocumentsContract.isDocumentUri(context, uri) ->
+                runCatching { DocumentsContract.renameDocument(resolver, uri, safeName) }.getOrNull()
+            else -> null
+        }
+    }
+
     private fun queryDocument(uri: Uri): PdfDocument? {
+        if (uri.scheme == "file") {
+            val file = uri.path?.let { File(it) } ?: return null
+            if (!file.exists()) return null
+            return PdfDocument(uri, file.name, file.length(), file.lastModified())
+        }
         val projection = arrayOf(
             OpenableColumns.DISPLAY_NAME,
             OpenableColumns.SIZE,
