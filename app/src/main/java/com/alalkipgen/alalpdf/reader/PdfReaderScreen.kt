@@ -1,7 +1,10 @@
 package com.alalkipgen.alalpdf.reader
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -16,6 +19,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
 fun PdfReaderScreen(state: PdfReaderUiState, initialPage: Int = 0, nightMode: Boolean = false, onNightModeChange: (Boolean) -> Unit, onShare: () -> Unit, onPageSelected: (Int) -> Unit, onRender: (Int) -> Unit) {
@@ -48,13 +52,65 @@ fun PdfReaderScreen(state: PdfReaderUiState, initialPage: Int = 0, nightMode: Bo
                 }
             }
         }
-        LaunchedEffect(visiblePage) { onPageSelected(visiblePage) }
+        LaunchedEffect(listState) {
+            snapshotFlow { listState.firstVisibleItemIndex }
+                .distinctUntilChanged()
+                .collect { onPageSelected(it) }
+        }
     }
 }
 
+/**
+ * Renders a single page.
+ *
+ * Pinch gestures are only consumed when two pointers are down, and drags are
+ * only consumed once the page is zoomed in. Otherwise the gesture is left for
+ * the enclosing list so vertical scrolling keeps working.
+ */
 @Composable private fun ZoomablePage(bitmap: android.graphics.Bitmap, pageIndex: Int) {
     var scale by remember(pageIndex) { mutableStateOf(1f) }
     var offsetX by remember(pageIndex) { mutableStateOf(0f) }
     var offsetY by remember(pageIndex) { mutableStateOf(0f) }
-    Image(bitmap.asImageBitmap(), "PDF page ${pageIndex + 1}", Modifier.fillMaxWidth().padding(8.dp).clipToBounds().semantics { contentDescription = "PDF page ${pageIndex + 1}" }.graphicsLayer(scaleX = scale, scaleY = scale, translationX = offsetX, translationY = offsetY).pointerInput(pageIndex) { detectTransformGestures { _, pan, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 4f); offsetX += pan.x; offsetY += pan.y } }.pointerInput(pageIndex) { detectTapGestures(onDoubleTap = { scale = if (scale > 1f) 1f else 2f; offsetX = 0f; offsetY = 0f }) })
+    Image(
+        bitmap.asImageBitmap(),
+        "PDF page ${pageIndex + 1}",
+        Modifier
+            .fillMaxWidth()
+            .padding(8.dp)
+            .clipToBounds()
+            .semantics { contentDescription = "PDF page ${pageIndex + 1}" }
+            .graphicsLayer(scaleX = scale, scaleY = scale, translationX = offsetX, translationY = offsetY)
+            .pointerInput(pageIndex) {
+                detectTapGestures(onDoubleTap = {
+                    scale = if (scale > 1f) 1f else 2f
+                    offsetX = 0f
+                    offsetY = 0f
+                })
+            }
+            .pointerInput(pageIndex) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val pinching = event.changes.size >= 2
+                        if (pinching || scale > 1f) {
+                            if (pinching) {
+                                scale = (scale * event.calculateZoom()).coerceIn(1f, 4f)
+                            }
+                            if (scale > 1f) {
+                                val pan = event.calculatePan()
+                                val maxX = size.width * (scale - 1f) / 2f
+                                val maxY = size.height * (scale - 1f) / 2f
+                                offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
+                                offsetY = (offsetY + pan.y).coerceIn(-maxY, maxY)
+                            } else {
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
+                            event.changes.forEach { it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
+    )
 }
