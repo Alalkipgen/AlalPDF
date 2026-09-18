@@ -37,7 +37,9 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     fun initialize(context: Context) {
         if (!::cache.isInitialized) {
             val memoryClass = (context.getSystemService(ActivityManager::class.java)?.memoryClass ?: 128) * 1024 * 1024
-            cache = BitmapPageCache(memoryClass / 8)
+            // A quarter of the heap keeps far more pages warm, so returning to a
+            // page no longer shows a loading spinner again.
+            cache = BitmapPageCache(memoryClass / 4)
         }
     }
 
@@ -54,7 +56,9 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 ensureActive()
                 if (currentGeneration != generation) return@runCatching
                 _uiState.value = PdfReaderUiState(isLoading = false, pageCount = count, pages = cache.snapshot())
-                if (count > 0) render(uri, initialPage.coerceIn(0, count - 1), width, currentGeneration, nightMode)
+                if (count > 0) {
+                    renderWindow(uri, initialPage.coerceIn(0, count - 1), width, currentGeneration, nightMode)
+                }
             }.onFailure {
                 if (it is CancellationException) throw it
                 _uiState.value = PdfReaderUiState(isLoading = false, errorMessage = it.message ?: "Unable to open PDF")
@@ -64,6 +68,21 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
     fun render(uri: Uri, pageIndex: Int, width: Int, nightMode: Boolean = false) =
         render(uri, pageIndex, width, generation, nightMode)
+
+    /**
+     * Renders the requested page plus its neighbours. Prefetching removes almost
+     * every loading placeholder while scrolling continuously.
+     */
+    fun renderWindow(uri: Uri, pageIndex: Int, width: Int, nightMode: Boolean = false) =
+        renderWindow(uri, pageIndex, width, generation, nightMode)
+
+    private fun renderWindow(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int, nightMode: Boolean) {
+        render(uri, pageIndex, width, expectedGeneration, nightMode)
+        for (offset in 1..2) {
+            render(uri, pageIndex + offset, width, expectedGeneration, nightMode)
+            render(uri, pageIndex - offset, width, expectedGeneration, nightMode)
+        }
+    }
 
     private fun render(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int, nightMode: Boolean = false) {
         if (pageIndex !in 0 until _uiState.value.pageCount) return

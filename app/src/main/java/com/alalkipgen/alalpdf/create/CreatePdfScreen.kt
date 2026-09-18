@@ -1,6 +1,7 @@
 package com.alalkipgen.alalpdf.create
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -64,8 +65,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
@@ -234,9 +236,7 @@ private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri)
                             Text("Pinch or double tap to zoom", style = MaterialTheme.typography.bodySmall)
                         }
                     },
-                    actions = {
-                        TextButton(onClick = { previewFile = null }) { Text("Edit") }
-                    },
+                    actions = { TextButton(onClick = { previewFile = null }) { Text("Edit") } },
                 )
             },
             floatingActionButton = {
@@ -311,11 +311,9 @@ private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(images.size) { index ->
                             Box {
-                                AsyncImage(
-                                    model = images[index],
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
+                                LocalImage(
+                                    images[index],
+                                    Modifier
                                         .size(width = 84.dp, height = 104.dp)
                                         .padding(top = 6.dp, end = 6.dp),
                                 )
@@ -366,6 +364,34 @@ private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri)
             message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Spacer(Modifier.height(80.dp))
         }
+    }
+}
+
+/** Small local image loader so the app does not need an image loading library. */
+@Composable
+private fun LocalImage(uri: Uri, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(uri) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val options = BitmapFactory.Options().apply { inSampleSize = 4 }
+                    BitmapFactory.decodeStream(input, null, options)
+                }
+            }.getOrNull()
+        }
+    }
+    val image = bitmap
+    if (image != null) {
+        Image(
+            bitmap = image.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier,
+        )
+    } else {
+        Surface(modifier, color = MaterialTheme.colorScheme.surfaceVariant) {}
     }
 }
 
