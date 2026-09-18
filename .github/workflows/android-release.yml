@@ -1,0 +1,65 @@
+name: Android Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Ensure Gradle wrapper is executable
+        run: chmod +x ./gradlew
+      - name: Decode release keystore when configured
+        env:
+          ALALPDF_KEYSTORE_BASE64: ${{ secrets.ALALPDF_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$ALALPDF_KEYSTORE_BASE64" ]; then
+            printf '%s' "$ALALPDF_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/alalpdf-release.keystore"
+            echo "ALALPDF_KEYSTORE_PATH=$RUNNER_TEMP/alalpdf-release.keystore" >> "$GITHUB_ENV"
+          fi
+      - name: Run release unit tests
+        run: ./gradlew testReleaseUnitTest --stacktrace
+        env:
+          ALALPDF_KEYSTORE_PASSWORD: ${{ secrets.ALALPDF_KEYSTORE_PASSWORD }}
+          ALALPDF_KEY_ALIAS: ${{ secrets.ALALPDF_KEY_ALIAS }}
+          ALALPDF_KEY_PASSWORD: ${{ secrets.ALALPDF_KEY_PASSWORD }}
+      - name: Run release lint
+        run: ./gradlew lintRelease --stacktrace
+      - name: Assemble release APK
+        run: ./gradlew assembleRelease --stacktrace
+        env:
+          ALALPDF_KEYSTORE_PASSWORD: ${{ secrets.ALALPDF_KEYSTORE_PASSWORD }}
+          ALALPDF_KEY_ALIAS: ${{ secrets.ALALPDF_KEY_ALIAS }}
+          ALALPDF_KEY_PASSWORD: ${{ secrets.ALALPDF_KEY_PASSWORD }}
+      - name: Prepare APK and checksum
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk alal-pdf-v0.1.0-beta.apk
+          sha256sum alal-pdf-v0.1.0-beta.apk > alal-pdf-v0.1.0-beta.apk.sha256
+      - name: Upload release build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alal-pdf-v0.1.0-beta
+          path: |
+            alal-pdf-v0.1.0-beta.apk
+            alal-pdf-v0.1.0-beta.apk.sha256
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            alal-pdf-v0.1.0-beta.apk
+            alal-pdf-v0.1.0-beta.apk.sha256
+          tag_name: ${{ github.ref_name }}

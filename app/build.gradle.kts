@@ -5,6 +5,12 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val releaseKeystorePath = System.getenv("ALALPDF_KEYSTORE_PATH")
+val releaseKeystorePassword = System.getenv("ALALPDF_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("ALALPDF_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("ALALPDF_KEY_PASSWORD")
+val hasReleaseCredentials = listOf(releaseKeystorePath, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
+
 android { namespace = "com.alalkipgen.alalpdf"; compileSdk = 35
     defaultConfig { applicationId = "com.alalkipgen.alalpdf"; minSdk = 26; targetSdk = 35; versionCode = 1; versionName = "0.1.0-beta"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     compileOptions {
@@ -13,6 +19,24 @@ android { namespace = "com.alalkipgen.alalpdf"; compileSdk = 35
     }
     buildFeatures { compose = true }
     sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
+    signingConfigs {
+        create("release") {
+            if (hasReleaseCredentials) {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = if (hasReleaseCredentials) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
 }
 
 kotlin {
