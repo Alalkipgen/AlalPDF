@@ -1,5 +1,7 @@
 package com.alalkipgen.alalpdf.reader
 
+import android.app.ActivityManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.ViewModel
@@ -7,14 +9,14 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.isActive
-import android.app.ActivityManager
-import android.content.Context
+import java.util.concurrent.ConcurrentHashMap
 
 data class PdfReaderUiState(
     val isLoading: Boolean = true,
@@ -27,8 +29,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     private val _uiState = MutableStateFlow(PdfReaderUiState())
     val uiState: StateFlow<PdfReaderUiState> = _uiState.asStateFlow()
     private var loadJob: Job? = null
-    private var generation = 0
-    private val renderJobs = mutableMapOf<Int, Job>()
+    @Volatile private var generation = 0
+    private val renderJobs = ConcurrentHashMap<Int, Job>()
     private lateinit var cache: BitmapPageCache
 
     fun initialize(context: Context) {
@@ -40,12 +42,16 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
     fun load(uri: Uri, width: Int, initialPage: Int = 0, nightMode: Boolean = false) {
         loadJob?.cancel()
+        renderJobs.values.forEach(Job::cancel)
+        renderJobs.clear()
+        if (::cache.isInitialized) cache.clear()
         val currentGeneration = ++generation
         loadJob = viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = PdfReaderUiState()
             runCatching {
                 val count = repository.pageCount(uri)
                 ensureActive()
+                if (currentGeneration != generation) return@runCatching
                 _uiState.value = PdfReaderUiState(isLoading = false, pageCount = count, pages = cache.snapshot())
                 if (count > 0) render(uri, initialPage.coerceIn(0, count - 1), width, currentGeneration, nightMode)
             }.onFailure {
@@ -55,33 +61,41 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
-    fun render(uri: Uri, pageIndex: Int, width: Int, nightMode: Boolean = false) = render(uri, pageIndex, width, generation, nightMode)
+    fun render(uri: Uri, pageIndex: Int, width: Int, nightMode: Boolean = false) =
+        render(uri, pageIndex, width, generation, nightMode)
 
     private fun render(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int, nightMode: Boolean = false) {
         if (pageIndex !in 0 until _uiState.value.pageCount) return
         if (cache.get(pageIndex) != null) {
-            // Publishing the snapshot keeps evicted pages out of the UI state so
-            // they are re-rendered on demand instead of being drawn after eviction.
-            _uiState.value = _uiState.value.copy(pages = cache.snapshot())
+            publishPages()
             return
         }
-        renderJobs[pageIndex]?.cancel()
+        if (renderJobs[pageIndex]?.isActive == true) return
         renderJobs[pageIndex] = viewModelScope.launch(Dispatchers.IO) {
             runCatching { repository.render(uri, pageIndex, width, nightMode) }.onSuccess { bitmap ->
                 if (expectedGeneration != generation || !isActive) return@onSuccess
                 cache.put(pageIndex, bitmap)
-                _uiState.value = _uiState.value.copy(isLoading = false, pages = cache.snapshot())
+                publishPages()
             }.onFailure {
                 if (it is kotlinx.coroutines.CancellationException) throw it
-                _uiState.value = _uiState.value.copy(isLoading = false, errorMessage = it.message ?: "Unable to render page")
+                if (expectedGeneration != generation) return@onFailure
+                _uiState.update { state -> state.copy(isLoading = false, errorMessage = it.message ?: "Unable to render page") }
             }
+            renderJobs.remove(pageIndex)
         }
+    }
+
+    private fun publishPages() {
+        val snapshot = cache.snapshot()
+        _uiState.update { state -> state.copy(isLoading = false, pages = snapshot) }
     }
 
     override fun onCleared() {
         loadJob?.cancel()
         renderJobs.values.forEach(Job::cancel)
+        renderJobs.clear()
         if (::cache.isInitialized) cache.clear()
+        repository.close()
         super.onCleared()
     }
 

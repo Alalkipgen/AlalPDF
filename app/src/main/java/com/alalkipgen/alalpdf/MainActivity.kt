@@ -1,42 +1,49 @@
 package com.alalkipgen.alalpdf
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.runtime.collectAsState
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.Text
-import com.alalkipgen.alalpdf.ui.theme.AlalPdfTheme
-import com.alalkipgen.alalpdf.ui.theme.ThemeMode
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.alalkipgen.alalpdf.data.AlalPdfDatabase
+import com.alalkipgen.alalpdf.data.AlalPdfRepository
 import com.alalkipgen.alalpdf.library.LibraryScreen
 import com.alalkipgen.alalpdf.library.LibraryViewModel
 import com.alalkipgen.alalpdf.library.PdfLibraryRepository
 import com.alalkipgen.alalpdf.library.RecentDocumentsStore
-import com.alalkipgen.alalpdf.reader.ReadingProgressStore
 import com.alalkipgen.alalpdf.reader.PdfReaderRepository
 import com.alalkipgen.alalpdf.reader.PdfReaderScreen
 import com.alalkipgen.alalpdf.reader.PdfReaderViewModel
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import com.alalkipgen.alalpdf.data.AlalPdfDatabase
-import com.alalkipgen.alalpdf.data.AlalPdfRepository
+import com.alalkipgen.alalpdf.reader.ReadingProgressStore
+import com.alalkipgen.alalpdf.ui.theme.AlalPdfTheme
+import com.alalkipgen.alalpdf.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
-import android.content.Intent
 
 class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); setContent { var mode by rememberSaveable { mutableStateOf(ThemeMode.SYSTEM.name) }; AlalPdfTheme(ThemeMode.valueOf(mode)) { LibraryRoute(onThemeChange = { mode = it.name }) } } }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            var mode by rememberSaveable { mutableStateOf(ThemeMode.SYSTEM.name) }
+            AlalPdfTheme(ThemeMode.valueOf(mode)) { LibraryRoute(onThemeChange = { mode = it.name }) }
+        }
+    }
 }
 
 @Composable private fun LibraryRoute(onThemeChange: (ThemeMode) -> Unit) {
@@ -64,6 +71,9 @@ class MainActivity : ComponentActivity() {
     if (selectedUri == null) {
         LibraryScreen(state, { pdfLauncher.launch(arrayOf("application/pdf")) }, { folderLauncher.launch(null) }, onThemeChange) { viewModel.remember(it); selectedUri = it.uri.toString() }
     } else {
+        // Without this the system back button closed the whole app instead of
+        // returning to the library.
+        BackHandler { selectedUri = null }
         val readerViewModel: PdfReaderViewModel = viewModel(factory = PdfReaderViewModel.Factory(PdfReaderRepository(contentResolver)))
         readerViewModel.initialize(appContext)
         val readerState by readerViewModel.uiState.collectAsState()
@@ -81,12 +91,20 @@ class MainActivity : ComponentActivity() {
             readerViewModel.load(uri, width, initialPage ?: 0, nightMode)
         }
         initialPage?.let { page ->
-            PdfReaderScreen(readerState, initialPage = page, nightMode = nightMode, onNightModeChange = { nightMode = it; readerViewModel.load(uri, width, page, nightMode = it) }, onShare = {
-                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "application/pdf"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share PDF"))
-            }, onPageSelected = { visiblePage ->
-                scope.launch { progressStore.save(uri, visiblePage) }
-                readerViewModel.render(uri, visiblePage, width, nightMode)
-            }) { page -> readerViewModel.render(uri, page, width, nightMode) }
+            PdfReaderScreen(
+                readerState,
+                initialPage = page,
+                nightMode = nightMode,
+                onBack = { selectedUri = null },
+                onNightModeChange = { nightMode = it; readerViewModel.load(uri, width, page, nightMode = it) },
+                onShare = {
+                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "application/pdf"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share PDF"))
+                },
+                onPageSelected = { visiblePage ->
+                    scope.launch { progressStore.save(uri, visiblePage) }
+                    readerViewModel.render(uri, visiblePage, width, nightMode)
+                },
+            ) { pageIndex -> readerViewModel.render(uri, pageIndex, width, nightMode) }
         }
     }
 }
