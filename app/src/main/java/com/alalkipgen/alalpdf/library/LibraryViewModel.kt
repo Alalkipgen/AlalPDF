@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 
 data class LibraryUiState(
     val isLoading: Boolean = false,
@@ -21,8 +22,8 @@ class LibraryViewModel(private val repository: PdfLibraryRepository, private val
 
     fun openDocument(uri: Uri) = load { listOf(repository.inspect(uri)) }
     fun openFolder(uri: Uri) = load { repository.listFolder(uri) }
-    fun loadRecent() { _uiState.value = LibraryUiState(documents = recentStore.recent()) }
-    fun remember(document: PdfDocument) { recentStore.add(document) }
+    fun loadRecent() { viewModelScope.launch { recentStore.recent.collect { _uiState.value = LibraryUiState(documents = it) } } }
+    fun remember(document: PdfDocument) { viewModelScope.launch { recentStore.add(document) } }
 
     private fun load(block: suspend () -> List<PdfDocument>) {
         viewModelScope.launch {
