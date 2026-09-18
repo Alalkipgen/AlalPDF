@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 class RecentDocumentsStore(private val repository: AlalPdfRepository) {
-    val recent: Flow<List<PdfDocument>> = repository.recent().map { list -> list.map { PdfDocument(Uri.parse(it.uri), it.displayName, it.sizeBytes, it.lastModified) } }
+    val recent: Flow<List<PdfDocument>> = repository.recent().map { list ->
+        list.map { PdfDocument(Uri.parse(it.uri), it.displayName, it.sizeBytes, it.lastModified, it.lastReadPage) }
+    }
     suspend fun add(document: PdfDocument) = repository.remember(document)
 }

@@ -42,8 +42,16 @@ class PdfLibraryRepository(private val context: Context) {
         }
     }
 
-    fun hasPersistedReadPermission(uri: Uri): Boolean =
-        context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
+    /**
+     * A persisted tree permission also covers every document inside that tree,
+     * so files opened from the in-app folder browser are readable as well.
+     */
+    fun hasPersistedReadPermission(uri: Uri): Boolean {
+        val target = uri.toString()
+        return context.contentResolver.persistedUriPermissions.any {
+            it.isReadPermission && (it.uri == uri || target.startsWith(it.uri.toString()))
+        }
+    }
 
     private fun queryDocument(uri: Uri): PdfDocument? {
         val projection = arrayOf(

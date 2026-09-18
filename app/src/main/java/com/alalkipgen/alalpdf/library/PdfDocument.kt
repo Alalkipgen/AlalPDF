@@ -7,4 +7,5 @@ data class PdfDocument(
     val name: String,
     val sizeBytes: Long,
     val lastModified: Long,
+    val lastReadPage: Int = 0,
 )
