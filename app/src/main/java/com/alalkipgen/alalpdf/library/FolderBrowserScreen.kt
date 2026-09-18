@@ -144,7 +144,7 @@ fun FolderBrowserScreen(
         Column(Modifier.fillMaxSize().padding(contentPadding)) {
             if (state.breadcrumbs.isNotEmpty()) {
                 Text(
-                    state.breadcrumbs.joinToString(" › "),
+                    state.breadcrumbs.joinToString(" \u203a "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -206,7 +206,7 @@ fun FolderBrowserScreen(
                     tint = MaterialTheme.colorScheme.primary,
                 )
             } else {
-                PdfBadge(Modifier.size(width = 36.dp, height = 46.dp))
+                PdfThumbnail(entry.uri, 36.dp, 46.dp)
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(
@@ -219,7 +219,7 @@ fun FolderBrowserScreen(
                     Text(
                         listOf(formatBytes(entry.sizeBytes), formatDate(entry.lastModified))
                             .filter { it.isNotBlank() }
-                            .joinToString(" • "),
+                            .joinToString(" \u2022 "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
