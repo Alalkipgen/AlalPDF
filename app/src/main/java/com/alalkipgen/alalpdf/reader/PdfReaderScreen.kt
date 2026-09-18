@@ -34,9 +34,13 @@ fun PdfReaderScreen(state: PdfReaderUiState, initialPage: Int = 0, onRender: (In
             state.pageCount == 0 -> CircularProgressIndicator(Modifier.align(Alignment.Center))
             else -> LazyColumn(Modifier.fillMaxSize(), state = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = initialPage)) {
                 items((0 until state.pageCount).toList(), key = { it }) { pageIndex ->
-                    state.pages[pageIndex]?.let { bitmap ->
+                    val bitmap = state.pages[pageIndex]
+                    if (bitmap != null) {
                         ZoomablePage(bitmap, pageIndex)
-                    } ?: run { LaunchedEffect(pageIndex) { onRender(pageIndex) }; CircularProgressIndicator(Modifier.padding(24.dp)) }
+                    } else {
+                        LaunchedEffect(pageIndex) { onRender(pageIndex) }
+                        CircularProgressIndicator(Modifier.padding(24.dp))
+                    }
                 }
             }
         }
