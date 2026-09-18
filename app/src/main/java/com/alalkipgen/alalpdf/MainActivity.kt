@@ -11,6 +11,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Text
@@ -24,6 +25,7 @@ import com.alalkipgen.alalpdf.reader.ReadingProgressStore
 import com.alalkipgen.alalpdf.reader.PdfReaderRepository
 import com.alalkipgen.alalpdf.reader.PdfReaderScreen
 import com.alalkipgen.alalpdf.reader.PdfReaderViewModel
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
@@ -38,16 +40,17 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable private fun LibraryRoute(onThemeChange: (ThemeMode) -> Unit) {
-    val repository = PdfLibraryRepository(androidx.compose.ui.platform.LocalContext.current.applicationContext)
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val contentResolver = androidx.compose.ui.platform.LocalContext.current.contentResolver
-    val dataRepository = remember { AlalPdfRepository(AlalPdfDatabase.create(androidx.compose.ui.platform.LocalContext.current.applicationContext).dao()) }
-    val recentStore = remember { RecentDocumentsStore(dataRepository) }
+    val context = LocalContext.current
+    val appContext = context.applicationContext
+    val repository = remember(appContext) { PdfLibraryRepository(appContext) }
+    val contentResolver = context.contentResolver
+    val dataRepository = remember(appContext) { AlalPdfRepository(AlalPdfDatabase.create(appContext).dao()) }
+    val recentStore = remember(dataRepository) { RecentDocumentsStore(dataRepository) }
     val scope = rememberCoroutineScope()
     val viewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory(repository, recentStore))
     val state by viewModel.uiState.collectAsState()
     var selectedUri by rememberSaveable { mutableStateOf<String?>(null) }
-    androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.loadRecent() }
+    LaunchedEffect(Unit) { viewModel.loadRecent() }
     val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             repository.persistReadPermission(it)
@@ -62,10 +65,10 @@ class MainActivity : ComponentActivity() {
         LibraryScreen(state, { pdfLauncher.launch(arrayOf("application/pdf")) }, { folderLauncher.launch(null) }, onThemeChange) { viewModel.remember(it); selectedUri = it.uri.toString() }
     } else {
         val readerViewModel: PdfReaderViewModel = viewModel(factory = PdfReaderViewModel.Factory(PdfReaderRepository(contentResolver)))
-        readerViewModel.initialize(androidx.compose.ui.platform.LocalContext.current.applicationContext)
+        readerViewModel.initialize(appContext)
         val readerState by readerViewModel.uiState.collectAsState()
         val uri = android.net.Uri.parse(selectedUri)
-        val progressStore = remember { ReadingProgressStore(dataRepository) }
+        val progressStore = remember(dataRepository) { ReadingProgressStore(dataRepository) }
         if (!repository.hasPersistedReadPermission(uri)) {
             Text("This PDF permission is no longer available. Please open it again.")
             return
@@ -73,7 +76,7 @@ class MainActivity : ComponentActivity() {
         val width = with(LocalDensity.current) { (LocalConfiguration.current.screenWidthDp.dp - 16.dp).roundToPx().coerceAtLeast(1) }
         var nightMode by rememberSaveable(uri.toString()) { mutableStateOf(false) }
         var initialPage by remember(uri) { mutableStateOf<Int?>(null) }
-        androidx.compose.runtime.LaunchedEffect(uri) {
+        LaunchedEffect(uri) {
             initialPage = progressStore.page(uri)
             readerViewModel.load(uri, width, initialPage ?: 0, nightMode)
         }
