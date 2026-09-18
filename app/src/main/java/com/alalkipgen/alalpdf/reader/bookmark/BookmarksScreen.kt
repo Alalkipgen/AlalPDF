@@ -161,8 +161,9 @@ fun BookmarksScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun BookmarkCard(bookmark: BookmarkEntity, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), onClick = onClick) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(14.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),

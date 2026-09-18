@@ -190,8 +190,9 @@ fun FolderBrowserScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun EntryCard(entry: FolderEntry, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), onClick = onClick) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
