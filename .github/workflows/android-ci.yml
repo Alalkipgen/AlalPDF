@@ -34,6 +34,9 @@ jobs:
       - name: Run lint
         run: ./gradlew lintDebug --stacktrace 2>&1 | tee build-lint.log
         shell: bash -o pipefail {0}
+      - name: Verify release build
+        run: ./gradlew assembleRelease --stacktrace 2>&1 | tee build-release.log
+        shell: bash -o pipefail {0}
       - name: Upload APK and lint reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -46,4 +49,5 @@ jobs:
             build-assemble.log
             build-test.log
             build-lint.log
+            build-release.log
           if-no-files-found: warn

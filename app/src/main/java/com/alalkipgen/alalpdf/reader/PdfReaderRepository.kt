@@ -19,7 +19,8 @@ class PdfReaderRepository(private val resolver: ContentResolver) {
     }
 
     private fun open(uri: Uri): PdfRendererSource {
-        val descriptor = resolver.openFileDescriptor(uri, "r") ?: error("Unable to open PDF")
-        return PdfRendererSource.open(descriptor)
+        val descriptor = resolver.openFileDescriptor(uri, "r") ?: error("Unable to open PDF: no readable file descriptor")
+        return runCatching { PdfRendererSource.open(descriptor) }
+            .getOrElse { throw IllegalArgumentException("Unable to open PDF. The file may be corrupted or password protected.", it) }
     }
 }
