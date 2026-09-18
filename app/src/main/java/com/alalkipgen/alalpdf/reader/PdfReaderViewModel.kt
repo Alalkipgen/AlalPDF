@@ -38,7 +38,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
-    fun load(uri: Uri, width: Int) {
+    fun load(uri: Uri, width: Int, initialPage: Int = 0) {
         loadJob?.cancel()
         val currentGeneration = ++generation
         loadJob = viewModelScope.launch(Dispatchers.IO) {
@@ -47,7 +47,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 val count = repository.pageCount(uri)
                 ensureActive()
                 _uiState.value = PdfReaderUiState(isLoading = false, pageCount = count, pages = cache.snapshot())
-                if (count > 0) render(uri, 0, width, currentGeneration)
+                if (count > 0) render(uri, initialPage.coerceIn(0, count - 1), width, currentGeneration)
             }.onFailure {
                 if (it is kotlinx.coroutines.CancellationException) throw it
                 _uiState.value = PdfReaderUiState(isLoading = false, errorMessage = it.message ?: "Unable to open PDF")

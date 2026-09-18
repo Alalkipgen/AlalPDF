@@ -26,7 +26,7 @@ fun LibraryScreen(state: LibraryUiState, onOpenPdf: () -> Unit, onOpenFolder: ()
         when {
             state.isLoading -> CircularProgressIndicator()
             state.errorMessage != null -> Text(state.errorMessage, color = MaterialTheme.colorScheme.error)
-            state.documents.isEmpty() -> Text("No PDF files selected yet.")
+            state.documents.isEmpty() -> Text("No recent PDF files.")
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(state.documents, key = { it.uri.toString() }) { document ->
                     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {

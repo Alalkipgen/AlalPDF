@@ -28,12 +28,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun PdfReaderScreen(uri: Uri, state: PdfReaderUiState, onRender: (Int) -> Unit) {
+fun PdfReaderScreen(uri: Uri, state: PdfReaderUiState, initialPage: Int = 0, onRender: (Int) -> Unit) {
     Box(Modifier.fillMaxSize()) {
         when {
             state.errorMessage != null -> Text(state.errorMessage, Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.error)
             state.pageCount == 0 -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(Modifier.fillMaxSize(), state = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = initialPage)) {
                 items((0 until state.pageCount).toList(), key = { it }) { pageIndex ->
                     state.pages[pageIndex]?.let { bitmap ->
                         ZoomablePage(bitmap, pageIndex)

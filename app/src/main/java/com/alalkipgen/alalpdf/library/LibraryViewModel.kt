@@ -15,12 +15,14 @@ data class LibraryUiState(
     val errorMessage: String? = null,
 )
 
-class LibraryViewModel(private val repository: PdfLibraryRepository) : ViewModel() {
+class LibraryViewModel(private val repository: PdfLibraryRepository, private val recentStore: RecentDocumentsStore) : ViewModel() {
     private val _uiState = MutableStateFlow(LibraryUiState())
     val uiState: StateFlow<LibraryUiState> = _uiState.asStateFlow()
 
     fun openDocument(uri: Uri) = load { listOf(repository.inspect(uri)) }
     fun openFolder(uri: Uri) = load { repository.listFolder(uri) }
+    fun loadRecent() { _uiState.value = LibraryUiState(documents = recentStore.recent()) }
+    fun remember(document: PdfDocument) { recentStore.add(document) }
 
     private fun load(block: suspend () -> List<PdfDocument>) {
         viewModelScope.launch {
@@ -30,8 +32,8 @@ class LibraryViewModel(private val repository: PdfLibraryRepository) : ViewModel
         }
     }
 
-    class Factory(private val repository: PdfLibraryRepository) : ViewModelProvider.Factory {
+    class Factory(private val repository: PdfLibraryRepository, private val recentStore: RecentDocumentsStore) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T = LibraryViewModel(repository) as T
+        override fun <T : ViewModel> create(modelClass: Class<T>): T = LibraryViewModel(repository, recentStore) as T
     }
 }
