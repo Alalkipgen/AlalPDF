@@ -12,6 +12,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      ASSET_BASE: alal-pdf-${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -64,19 +66,19 @@ jobs:
           ALALPDF_KEY_PASSWORD: ${{ secrets.ALALPDF_KEY_PASSWORD }}
       - name: Prepare APK and checksum
         run: |
-          cp app/build/outputs/apk/release/app-release.apk alal-pdf-v0.1.0-beta.apk
-          sha256sum alal-pdf-v0.1.0-beta.apk > alal-pdf-v0.1.0-beta.apk.sha256
+          cp app/build/outputs/apk/release/app-release.apk "$ASSET_BASE.apk"
+          sha256sum "$ASSET_BASE.apk" > "$ASSET_BASE.apk.sha256"
       - name: Upload release build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: alal-pdf-v0.1.0-beta
+          name: alal-pdf-${{ github.ref_name }}
           path: |
-            alal-pdf-v0.1.0-beta.apk
-            alal-pdf-v0.1.0-beta.apk.sha256
+            alal-pdf-${{ github.ref_name }}.apk
+            alal-pdf-${{ github.ref_name }}.apk.sha256
       - name: Inspect release APK
         run: |
           set -euo pipefail
-          apk="alal-pdf-v0.1.0-beta.apk"
+          apk="$ASSET_BASE.apk"
           echo "APK size: $(stat -c '%s bytes' "$apk")"
           echo "APK SHA-256: $(sha256sum "$apk" | awk '{print $1}')"
           echo "APK zip integrity:"
@@ -103,6 +105,6 @@ jobs:
           body_path: RELEASE_NOTES.md
           prerelease: true
           files: |
-            alal-pdf-v0.1.0-beta.apk
-            alal-pdf-v0.1.0-beta.apk.sha256
+            alal-pdf-${{ github.ref_name }}.apk
+            alal-pdf-${{ github.ref_name }}.apk.sha256
           tag_name: ${{ github.ref_name }}
