@@ -5,6 +5,11 @@ import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,26 +23,38 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.abs
 
-/** Renders a locally generated PDF so the user can check it before saving. */
+/**
+ * Renders a locally generated PDF so the user can check it before saving.
+ * Supports pinch zoom, double tap zoom and horizontal pan while zoomed in.
+ */
 @Composable
 fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
-    var pages by remember(file.path, file.lastModified()) { mutableStateOf<List<Bitmap>>(emptyList()) }
-    var loading by remember(file.path, file.lastModified()) { mutableStateOf(true) }
+    val stamp = file.lastModified()
+    var pages by remember(file.path, stamp) { mutableStateOf<List<Bitmap>>(emptyList()) }
+    var loading by remember(file.path, stamp) { mutableStateOf(true) }
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
 
-    LaunchedEffect(file.path, file.lastModified()) {
+    LaunchedEffect(file.path, stamp) {
         loading = true
-        pages = withContext(Dispatchers.IO) { renderPages(file, 900) }
+        pages = withContext(Dispatchers.IO) { renderPages(file, 1000) }
         loading = false
     }
 
@@ -51,18 +68,54 @@ fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
                 Modifier.align(Alignment.Center),
                 color = MaterialTheme.colorScheme.error,
             )
-            else -> LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+            else -> Box(
+                Modifier
+                    .fillMaxSize()
+                    .clipToBounds()
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            do {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val pan = event.calculatePan()
+                                val maxX = size.width * (scale - 1f) / 2f
+                                if (event.changes.size >= 2) {
+                                    scale = (scale * event.calculateZoom()).coerceIn(1f, 5f)
+                                    offsetX = if (scale > 1f) (offsetX + pan.x).coerceIn(-maxX, maxX) else 0f
+                                    event.changes.forEach { it.consume() }
+                                } else if (scale > 1f && abs(pan.x) > abs(pan.y)) {
+                                    offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
+                                    event.changes.forEach { it.consume() }
+                                }
+                            } while (event.changes.any { it.pressed })
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(onDoubleTap = {
+                            scale = if (scale > 1f) 1f else 2.5f
+                            offsetX = 0f
+                        })
+                    }
             ) {
-                items(pages.size) { index ->
-                    Surface(Modifier.fillMaxWidth(), tonalElevation = 2.dp, shadowElevation = 2.dp) {
-                        Image(
-                            bitmap = pages[index].asImageBitmap(),
-                            contentDescription = "Preview page ${index + 1}",
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                LazyColumn(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = offsetX
+                        },
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(pages.size) { index ->
+                        Surface(Modifier.fillMaxWidth(), tonalElevation = 2.dp, shadowElevation = 2.dp) {
+                            Image(
+                                bitmap = pages[index].asImageBitmap(),
+                                contentDescription = "Preview page " + (index + 1),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
             }

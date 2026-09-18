@@ -16,13 +16,13 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 
-/** Everything the user configured on the create screen. */
+/** Everything the user configured on the create screens. */
 data class PdfSpec(
     val mode: CreatePdfMode,
     val title: String = "",
     val body: String = "",
     val images: List<Uri> = emptyList(),
-    val scan: Bitmap? = null,
+    val scans: List<Bitmap> = emptyList(),
 )
 
 class CreatePdfRepository(private val resolver: ContentResolver) {
@@ -52,10 +52,12 @@ class CreatePdfRepository(private val resolver: ContentResolver) {
 
     private fun validate(spec: PdfSpec) {
         when (spec.mode) {
-            CreatePdfMode.TEXT -> require(spec.title.isNotBlank() || spec.body.isNotBlank()) { "Enter text first" }
+            CreatePdfMode.TEXT -> require(spec.title.isNotBlank() || spec.body.isNotBlank()) { "Write something first" }
             CreatePdfMode.IMAGES -> require(spec.images.isNotEmpty()) { "Choose at least one image" }
-            CreatePdfMode.IMAGE_TEXT -> require(spec.images.isNotEmpty()) { "Choose at least one image" }
-            CreatePdfMode.SCAN -> requireNotNull(spec.scan) { "Capture a scan first" }
+            CreatePdfMode.IMAGE_TEXT -> require(spec.title.isNotBlank() || spec.body.isNotBlank() || spec.images.isNotEmpty()) {
+                "Write something or add an image"
+            }
+            CreatePdfMode.SCAN -> require(spec.scans.isNotEmpty()) { "Capture a page first" }
         }
     }
 
@@ -79,7 +81,9 @@ class CreatePdfRepository(private val resolver: ContentResolver) {
                     }
                 }
             }
-            CreatePdfMode.SCAN -> addImagePage(document, requireNotNull(spec.scan), 1)
+            CreatePdfMode.SCAN -> spec.scans.forEachIndexed { index, bitmap ->
+                addImagePage(document, bitmap, index + 1)
+            }
         }
     }
 
@@ -153,7 +157,12 @@ class CreatePdfRepository(private val resolver: ContentResolver) {
         val height = bitmap.height * scale
         val left = (pageWidth - width) / 2f
         val top = (pageHeight - height) / 2f
-        canvas.drawBitmap(bitmap, null, RectF(left, top, left + width, top + height), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+        canvas.drawBitmap(
+            bitmap,
+            null,
+            RectF(left, top, left + width, top + height),
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
+        )
     }
 
     private fun decode(uri: Uri): Bitmap? = resolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)

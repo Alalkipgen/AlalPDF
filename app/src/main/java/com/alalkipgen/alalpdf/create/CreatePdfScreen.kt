@@ -5,67 +5,193 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddAPhoto
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.NoteAdd
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.TextFields
-import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import java.io.File
 
 enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit) {
+    var mode by remember { mutableStateOf<CreatePdfMode?>(null) }
+    val selected = mode
+    if (selected == null) {
+        ModePicker(onBack = onBack, onPick = { mode = it })
+    } else {
+        CreateFlow(mode = selected, onBack = { mode = null }, onCreated = onCreated)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModePicker(onBack: () -> Unit, onPick: (CreatePdfMode) -> Unit) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                },
+                title = { Text("Create PDF") },
+            )
+        },
+    ) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ModeCard("Text PDF", "Write a note and turn it into a PDF", Icons.Default.TextFields) {
+                onPick(CreatePdfMode.TEXT)
+            }
+            ModeCard("Image PDF", "Pick photos from your gallery", Icons.Default.PhotoLibrary) {
+                onPick(CreatePdfMode.IMAGES)
+            }
+            ModeCard("Text + Image PDF", "Write a note and attach images", Icons.Default.NoteAdd) {
+                onPick(CreatePdfMode.IMAGE_TEXT)
+            }
+            ModeCard("Scan PDF", "Use the camera to scan pages", Icons.Default.DocumentScanner) {
+                onPick(CreatePdfMode.SCAN)
+            }
+            Text(
+                "Everything is generated offline on this device.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModeCard(title: String, subtitle: String, icon: ImageVector, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(Modifier.size(46.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(icon, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onPrimary)
+                }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri) -> Unit) {
     val context = LocalContext.current
     val repository = remember(context) { CreatePdfRepository(context.contentResolver) }
     val scope = rememberCoroutineScope()
-    var mode by remember { mutableStateOf(CreatePdfMode.TEXT) }
+
     var title by remember { mutableStateOf("") }
     var body by remember { mutableStateOf("") }
     var images by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var scanBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var scans by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
     var previewFile by remember { mutableStateOf<File?>(null) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
 
+    fun buildPreview() {
+        busy = true
+        message = null
+        scope.launch {
+            runCatching {
+                repository.buildPreview(context.cacheDir, PdfSpec(mode, title, body, images, scans))
+            }
+                .onSuccess { busy = false; previewFile = it }
+                .onFailure { busy = false; message = it.message ?: "Unable to build preview" }
+        }
+    }
+
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        images = uris
-        message = if (uris.isEmpty()) "No images selected" else uris.size.toString() + " image(s) selected"
+        if (uris.isNotEmpty()) {
+            images = images + uris
+            if (mode == CreatePdfMode.IMAGES) buildPreview()
+        } else if (mode == CreatePdfMode.IMAGES && images.isEmpty()) {
+            onBack()
+        }
     }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-        scanBitmap = bitmap
-        message = if (bitmap == null) "Scan cancelled" else "Scan captured"
+        if (bitmap != null) {
+            scans = scans + bitmap
+            buildPreview()
+        } else if (scans.isEmpty()) {
+            onBack()
+        }
     }
     val output = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         val source = previewFile
@@ -78,21 +204,16 @@ fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit) {
                     runCatching { source.delete() }
                     onCreated(uri)
                 }
-                .onFailure {
-                    busy = false
-                    message = it.message ?: "Unable to save PDF"
-                }
+                .onFailure { busy = false; message = it.message ?: "Unable to save PDF" }
         }
     }
 
-    fun buildPreview() {
-        busy = true
-        message = null
-        scope.launch {
-            val spec = PdfSpec(mode, title, body, images, scanBitmap)
-            runCatching { repository.buildPreview(context.cacheDir, spec) }
-                .onSuccess { busy = false; previewFile = it }
-                .onFailure { busy = false; message = it.message ?: "Unable to build preview" }
+    // Image and scan modes jump straight to the picker or the camera.
+    LaunchedEffect(mode) {
+        when (mode) {
+            CreatePdfMode.IMAGES -> imagePicker.launch("image/*")
+            CreatePdfMode.SCAN -> camera.launch(null)
+            else -> Unit
         }
     }
 
@@ -107,21 +228,32 @@ fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to editing")
                         }
                     },
-                    title = { Text("Preview") },
+                    title = {
+                        Column {
+                            Text("Preview", style = MaterialTheme.typography.titleMedium)
+                            Text("Pinch or double tap to zoom", style = MaterialTheme.typography.bodySmall)
+                        }
+                    },
                     actions = {
                         TextButton(onClick = { previewFile = null }) { Text("Edit") }
-                        TextButton(
-                            onClick = { output.launch((title.ifBlank { mode.defaultName }).sanitizePdfName()) },
-                            enabled = !busy,
-                        ) { Text(if (busy) "Saving\u2026" else "Save") }
                     },
+                )
+            },
+            floatingActionButton = {
+                ExtendedFloatingActionButton(
+                    onClick = { output.launch((title.ifBlank { mode.defaultName }).sanitizePdfName()) },
+                    icon = { Icon(Icons.Default.NoteAdd, null) },
+                    text = { Text(if (busy) "Saving\u2026" else "Save PDF") },
                 )
             },
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 message?.let {
-                    Text(it, Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                        color = MaterialTheme.colorScheme.error)
+                    Text(
+                        it,
+                        Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
                 PdfFilePreview(preview, Modifier.fillMaxSize())
             }
@@ -129,64 +261,123 @@ fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit) {
         return
     }
 
+    val heading = when (mode) {
+        CreatePdfMode.TEXT -> "New note"
+        CreatePdfMode.IMAGES -> "Selected images"
+        CreatePdfMode.IMAGE_TEXT -> "Note with images"
+        CreatePdfMode.SCAN -> "Scanned pages"
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-                title = { Text("Create PDF") },
+                title = { Text(heading) },
+            )
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = { buildPreview() },
+                icon = { Icon(Icons.Default.Image, null) },
+                text = { Text(if (busy) "Building\u2026" else "Preview") },
             )
         },
     ) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).padding(20.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            Modifier.fillMaxSize().padding(padding).padding(horizontal = 18.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            ModeButton("Text PDF", Icons.Default.TextFields, mode == CreatePdfMode.TEXT) { mode = CreatePdfMode.TEXT }
-            ModeButton("Image PDF", Icons.Default.Image, mode == CreatePdfMode.IMAGES) { mode = CreatePdfMode.IMAGES }
-            ModeButton("Image + Text PDF", Icons.Default.NoteAdd, mode == CreatePdfMode.IMAGE_TEXT) { mode = CreatePdfMode.IMAGE_TEXT }
-            ModeButton("Scan PDF", Icons.Default.CameraAlt, mode == CreatePdfMode.SCAN) { mode = CreatePdfMode.SCAN }
-
             if (mode == CreatePdfMode.TEXT || mode == CreatePdfMode.IMAGE_TEXT) {
-                OutlinedTextField(title, { title = it }, label = { Text("File title") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(body, { body = it }, label = { Text("Text") }, minLines = 8,
-                    modifier = Modifier.fillMaxWidth())
+                TextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    placeholder = { Text("Title", style = MaterialTheme.typography.headlineSmall) },
+                    textStyle = MaterialTheme.typography.headlineSmall,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = noteFieldColors(),
+                )
+                TextField(
+                    value = body,
+                    onValueChange = { body = it },
+                    placeholder = { Text("Start writing\u2026") },
+                    modifier = Modifier.fillMaxWidth().height(340.dp),
+                    colors = noteFieldColors(),
+                )
             }
+
             if (mode == CreatePdfMode.IMAGES || mode == CreatePdfMode.IMAGE_TEXT) {
-                OutlinedButton(onClick = { imagePicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (images.isEmpty()) "Choose images" else "Change images (" + images.size + ")")
+                if (images.isNotEmpty()) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(images.size) { index ->
+                            Box {
+                                AsyncImage(
+                                    model = images[index],
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(width = 84.dp, height = 104.dp)
+                                        .padding(top = 6.dp, end = 6.dp),
+                                )
+                                IconButton(
+                                    onClick = { images = images.filterIndexed { i, _ -> i != index } },
+                                    modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
+                                ) {
+                                    Icon(Icons.Default.Close, "Remove image", Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+                FilledTonalButton(onClick = { imagePicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.AddPhotoAlternate, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (images.isEmpty()) "Add images" else "Add more images")
                 }
             }
+
             if (mode == CreatePdfMode.SCAN) {
-                OutlinedButton(onClick = { camera.launch(null) }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (scanBitmap == null) "Open camera" else "Retake scan")
+                if (scans.isNotEmpty()) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(scans.size) { index ->
+                            Image(
+                                bitmap = scans[index].asImageBitmap(),
+                                contentDescription = "Page " + (index + 1),
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(width = 84.dp, height = 104.dp),
+                            )
+                        }
+                    }
+                }
+                FilledTonalButton(onClick = { camera.launch(null) }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.AddAPhoto, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (scans.isEmpty()) "Open camera" else "Scan another page")
+                }
+                if (scans.isNotEmpty()) {
+                    TextButton(onClick = { scans = emptyList(); camera.launch(null) }) {
+                        Icon(Icons.Default.CameraAlt, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Start over")
+                    }
                 }
             }
-            message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-            Button(onClick = { buildPreview() }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                Text(if (busy) "Building preview\u2026" else "Preview PDF")
-            }
-            Text(
-                "Check the preview first, then save. Everything is processed offline on this device.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+
+            message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.height(80.dp))
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ModeButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
-    if (selected) {
-        Button(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Icon(icon, null); Text(label) }
-        }
-    } else {
-        OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Icon(icon, null); Text(label) }
-        }
-    }
-}
+private fun noteFieldColors() = TextFieldDefaults.colors(
+    focusedContainerColor = Color.Transparent,
+    unfocusedContainerColor = Color.Transparent,
+    disabledContainerColor = Color.Transparent,
+    focusedIndicatorColor = Color.Transparent,
+    unfocusedIndicatorColor = Color.Transparent,
+)
 
 private val CreatePdfMode.defaultName: String get() = when (this) {
     CreatePdfMode.TEXT -> "New Text PDF"
