@@ -2,6 +2,7 @@ package com.alalkipgen.alalpdf.create
 
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +28,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import java.io.File
 
 enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
 
@@ -52,47 +55,78 @@ fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit) {
     var body by remember { mutableStateOf("") }
     var images by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var scanBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var saving by remember { mutableStateOf(false) }
+    var previewFile by remember { mutableStateOf<File?>(null) }
+    var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         images = uris
-        message = if (uris.isEmpty()) "No images selected" else "${uris.size} image(s) selected"
+        message = if (uris.isEmpty()) "No images selected" else uris.size.toString() + " image(s) selected"
     }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         scanBitmap = bitmap
         message = if (bitmap == null) "Scan cancelled" else "Scan captured"
     }
     val output = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        saving = true
+        val source = previewFile
+        if (uri == null || source == null) return@rememberLauncherForActivityResult
+        busy = true
         scope.launch {
-            runCatching {
-                when (mode) {
-                    CreatePdfMode.TEXT -> repository.writeText(uri, title, body)
-                    CreatePdfMode.IMAGES -> repository.writeImages(uri, images)
-                    CreatePdfMode.IMAGE_TEXT -> repository.writeImageAndText(uri, title, body, images)
-                    CreatePdfMode.SCAN -> repository.writeScan(uri, requireNotNull(scanBitmap) { "Capture a scan first" })
+            runCatching { repository.save(source, uri) }
+                .onSuccess {
+                    busy = false
+                    runCatching { source.delete() }
+                    onCreated(uri)
                 }
-            }.onSuccess {
-                saving = false
-                message = "PDF created"
-                onCreated(uri)
-            }.onFailure {
-                saving = false
-                message = it.message ?: "Unable to create PDF"
-            }
+                .onFailure {
+                    busy = false
+                    message = it.message ?: "Unable to save PDF"
+                }
         }
     }
 
-    fun save() {
-        when {
-            mode == CreatePdfMode.TEXT && title.isBlank() && body.isBlank() -> message = "Enter text first"
-            mode == CreatePdfMode.IMAGES && images.isEmpty() -> imagePicker.launch("image/*")
-            mode == CreatePdfMode.IMAGE_TEXT && images.isEmpty() -> imagePicker.launch("image/*")
-            mode == CreatePdfMode.SCAN && scanBitmap == null -> camera.launch(null)
-            else -> output.launch((title.ifBlank { mode.defaultName }).sanitizePdfName())
+    fun buildPreview() {
+        busy = true
+        message = null
+        scope.launch {
+            val spec = PdfSpec(mode, title, body, images, scanBitmap)
+            runCatching { repository.buildPreview(context.cacheDir, spec) }
+                .onSuccess { busy = false; previewFile = it }
+                .onFailure { busy = false; message = it.message ?: "Unable to build preview" }
         }
+    }
+
+    val preview = previewFile
+    if (preview != null) {
+        BackHandler { previewFile = null }
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { previewFile = null }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to editing")
+                        }
+                    },
+                    title = { Text("Preview") },
+                    actions = {
+                        TextButton(onClick = { previewFile = null }) { Text("Edit") }
+                        TextButton(
+                            onClick = { output.launch((title.ifBlank { mode.defaultName }).sanitizePdfName()) },
+                            enabled = !busy,
+                        ) { Text(if (busy) "Saving\u2026" else "Save") }
+                    },
+                )
+            },
+        ) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                message?.let {
+                    Text(it, Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                        color = MaterialTheme.colorScheme.error)
+                }
+                PdfFilePreview(preview, Modifier.fillMaxSize())
+            }
+        }
+        return
     }
 
     Scaffold(
@@ -120,7 +154,7 @@ fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit) {
             }
             if (mode == CreatePdfMode.IMAGES || mode == CreatePdfMode.IMAGE_TEXT) {
                 OutlinedButton(onClick = { imagePicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (images.isEmpty()) "Choose images" else "Change images (${images.size})")
+                    Text(if (images.isEmpty()) "Choose images" else "Change images (" + images.size + ")")
                 }
             }
             if (mode == CreatePdfMode.SCAN) {
@@ -129,11 +163,11 @@ fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit) {
                 }
             }
             message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-            Button(onClick = ::save, enabled = !saving, modifier = Modifier.fillMaxWidth()) {
-                Text(if (saving) "Creating…" else "Create PDF")
+            Button(onClick = { buildPreview() }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                Text(if (busy) "Building preview\u2026" else "Preview PDF")
             }
             Text(
-                "Files are created with Android's system save dialog. Image and text processing stays offline.",
+                "Check the preview first, then save. Everything is processed offline on this device.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -162,6 +196,6 @@ private val CreatePdfMode.defaultName: String get() = when (this) {
 }
 
 private fun String.sanitizePdfName(): String {
-    val clean = trim().replace(Regex("[\\/:*?\"<>|]"), "_").ifBlank { "New PDF" }
-    return if (clean.endsWith(".pdf", true)) clean else "$clean.pdf"
+    val clean = trim().replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "New PDF" }
+    return if (clean.endsWith(".pdf", true)) clean else clean + ".pdf"
 }
