@@ -44,6 +44,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,8 +56,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -83,6 +86,7 @@ fun PdfReaderScreen(
     onRender: (Int) -> Unit,
 ) {
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage.coerceAtLeast(0))
+    val haptics = LocalHapticFeedback.current
     var jumpOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var jumpText by remember { mutableStateOf("") }
@@ -96,7 +100,9 @@ fun PdfReaderScreen(
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
 
-    val visiblePage = listState.firstVisibleItemIndex
+    // derivedStateOf keeps the top bar and pill from recomposing on every pixel
+    // of scroll, which makes long documents noticeably smoother.
+    val visiblePage by remember { derivedStateOf { listState.firstVisibleItemIndex } }
     val lastIndex = (state.pageCount - 1).coerceAtLeast(0)
 
     LaunchedEffect(requestedPage) {
@@ -156,7 +162,10 @@ fun PdfReaderScreen(
                 },
                 actions = {
                     IconButton(
-                        onClick = { onNightModeChange(!nightMode) },
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onNightModeChange(!nightMode)
+                        },
                         colors = if (nightMode) {
                             IconButtonDefaults.filledTonalIconButtonColors()
                         } else {
@@ -186,7 +195,11 @@ fun PdfReaderScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text("Add bookmark") },
-                                onClick = { menuOpen = false; onAddBookmark() },
+                                onClick = {
+                                    menuOpen = false
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onAddBookmark()
+                                },
                             )
                         }
                     }
@@ -203,9 +216,16 @@ fun PdfReaderScreen(
                         Text("1", style = MaterialTheme.typography.labelSmall)
                         Slider(
                             value = sliderValue.coerceIn(0f, lastIndex.toFloat()),
-                            onValueChange = { dragging = true; sliderValue = it },
+                            onValueChange = { value ->
+                                if (value.roundToInt() != sliderValue.roundToInt()) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                                dragging = true
+                                sliderValue = value
+                            },
                             onValueChangeFinished = {
                                 dragging = false
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 requestedPage = sliderValue.roundToInt()
                             },
                             valueRange = 0f..lastIndex.toFloat(),
@@ -262,6 +282,7 @@ fun PdfReaderScreen(
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onDoubleTap = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     scale = if (scale > 1f) 1f else 2.5f
                                     offsetX = 0f
                                 }
@@ -281,9 +302,21 @@ fun PdfReaderScreen(
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            items(state.pageCount) { index ->
+                            items(state.pageCount, key = { index -> index }) { index ->
                                 val bitmap = state.pages[index]
-                                LaunchedEffect(index, nightMode) { onRender(index) }
+                                // Retry while the page is still missing. A single
+                                // dropped render request used to leave one page
+                                // spinning forever.
+                                LaunchedEffect(index, nightMode, bitmap == null) {
+                                    if (bitmap == null) {
+                                        var attempts = 0
+                                        while (attempts < 30) {
+                                            onRender(index)
+                                            attempts++
+                                            delay(700)
+                                        }
+                                    }
+                                }
                                 Surface(
                                     Modifier.fillMaxWidth(),
                                     tonalElevation = 2.dp,
