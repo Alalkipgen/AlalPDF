@@ -21,13 +21,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,14 +61,15 @@ fun LibraryScreen(
     currentTheme: ThemeMode,
     onOpenPdf: () -> Unit,
     onOpenFolder: () -> Unit,
+    onCreatePdf: () -> Unit,
     onThemeChange: (ThemeMode) -> Unit,
     onOpenDocument: (PdfDocument) -> Unit,
 ) {
     var searching by remember { mutableStateOf(false) }
+    var themeMenuOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     val documents = remember(state.documents, query) {
-        if (query.isBlank()) state.documents
-        else state.documents.filter { it.name.contains(query, ignoreCase = true) }
+        if (query.isBlank()) state.documents else state.documents.filter { it.name.contains(query, ignoreCase = true) }
     }
     val continueReading = documents.firstOrNull { it.lastReadPage > 0 }
     val recent = documents.filter { it.uri != continueReading?.uri }
@@ -97,17 +99,32 @@ fun LibraryScreen(
                 },
                 actions = {
                     IconButton(onClick = { searching = !searching; if (!searching) query = "" }) {
-                        Icon(if (searching) Icons.Default.Close else Icons.Default.Search, contentDescription = "Search")
+                        Icon(if (searching) Icons.Default.Close else Icons.Default.Search, contentDescription = "Search PDFs")
                     }
-                    IconButton(onClick = { onThemeChange(nextTheme(currentTheme)) }) {
-                        Icon(Icons.Default.Tune, contentDescription = "Switch theme")
+                    Box {
+                        IconButton(onClick = { themeMenuOpen = true }) {
+                            Icon(Icons.Default.Palette, contentDescription = "Theme settings")
+                        }
+                        DropdownMenu(expanded = themeMenuOpen, onDismissRequest = { themeMenuOpen = false }) {
+                            ThemeMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            (if (mode == currentTheme) "✓ " else "") +
+                                                mode.name.lowercase().replaceFirstChar(Char::uppercase)
+                                        )
+                                    },
+                                    onClick = { onThemeChange(mode); themeMenuOpen = false },
+                                )
+                            }
+                        }
                     }
                 },
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onOpenPdf) {
-                Icon(Icons.Default.Add, contentDescription = "Open a PDF")
+            FloatingActionButton(onClick = onCreatePdf) {
+                Icon(Icons.Default.Add, contentDescription = "Create PDF")
             }
         },
     ) { contentPadding ->
@@ -123,30 +140,25 @@ fun LibraryScreen(
             OutlinedButton(onClick = onOpenFolder, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Folder, contentDescription = null)
                 Spacer(Modifier.width(10.dp))
-                Text("Choose PDF folder")
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThemeMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = mode == currentTheme,
-                        onClick = { onThemeChange(mode) },
-                        label = { Text(mode.name.lowercase().replaceFirstChar(Char::uppercase)) },
-                    )
-                }
+                Text("Scan PDF folder")
             }
             Box(Modifier.fillMaxSize()) {
                 when {
-                    state.isLoading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                    state.isLoading -> Column(
+                        Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator()
+                        Text("Scanning PDF files…")
+                    }
                     state.errorMessage != null -> Text(
                         state.errorMessage,
                         Modifier.align(Alignment.Center),
                         color = MaterialTheme.colorScheme.error,
                         textAlign = TextAlign.Center,
                     )
-                    documents.isEmpty() -> EmptyState(
-                        Modifier.align(Alignment.Center),
-                        searching = query.isNotBlank(),
-                    )
+                    documents.isEmpty() -> EmptyState(Modifier.align(Alignment.Center), searching = query.isNotBlank())
                     else -> LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(bottom = 96.dp),
@@ -157,9 +169,7 @@ fun LibraryScreen(
                                 ContinueReadingCard(document) { onOpenDocument(document) }
                             }
                         }
-                        if (recent.isNotEmpty()) {
-                            item(key = "recent-header") { SectionLabel("RECENT") }
-                        }
+                        if (recent.isNotEmpty()) item(key = "files-header") { SectionLabel("PDF FILES") }
                         items(recent, key = { it.uri.toString() }) { document ->
                             DocumentRow(document) { onOpenDocument(document) }
                         }
@@ -170,35 +180,17 @@ fun LibraryScreen(
     }
 }
 
-private fun nextTheme(current: ThemeMode): ThemeMode = when (current) {
-    ThemeMode.SYSTEM -> ThemeMode.LIGHT
-    ThemeMode.LIGHT -> ThemeMode.DARK
-    ThemeMode.DARK -> ThemeMode.SYSTEM
-}
-
 @Composable private fun SectionLabel(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelMedium,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
-    )
+    Text(text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp, bottom = 2.dp))
 }
 
 @Composable internal fun PdfBadge(modifier: Modifier = Modifier) {
-    Surface(
-        modifier.size(width = 48.dp, height = 60.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.errorContainer,
-    ) {
+    Surface(modifier.size(width = 48.dp, height = 60.dp), shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.errorContainer) {
         Box(contentAlignment = Alignment.Center) {
-            Text(
-                "PDF",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-            )
+            Text("PDF", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onErrorContainer)
         }
     }
 }
@@ -206,24 +198,14 @@ private fun nextTheme(current: ThemeMode): ThemeMode = when (current) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun ContinueReadingCard(document: PdfDocument, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
             PdfBadge()
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    document.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    "${formatBytes(document.sizeBytes)} · page ${document.lastReadPage + 1}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(document.name, style = MaterialTheme.typography.titleMedium, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                Text("${formatBytes(document.sizeBytes)} · page ${document.lastReadPage + 1}",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -232,62 +214,33 @@ private fun nextTheme(current: ThemeMode): ThemeMode = when (current) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun DocumentRow(document: PdfDocument, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically) {
             PdfBadge(Modifier.size(width = 36.dp, height = 46.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    document.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    listOf(formatBytes(document.sizeBytes), formatDate(document.lastModified))
-                        .filter { it.isNotBlank() }
-                        .joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(document.name, style = MaterialTheme.typography.titleSmall, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                Text(listOf(formatBytes(document.sizeBytes), formatDate(document.lastModified))
+                    .filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
 }
 
 @Composable private fun EmptyState(modifier: Modifier = Modifier, searching: Boolean) {
-    Column(
-        modifier.padding(horizontal = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Surface(
-            Modifier.size(96.dp),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.secondaryContainer,
-        ) {
+    Column(modifier.padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Surface(Modifier.size(96.dp), shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Default.Description,
-                    contentDescription = null,
-                    modifier = Modifier.size(44.dp),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
+                Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(44.dp),
+                    tint = MaterialTheme.colorScheme.primary)
             }
         }
         Spacer(Modifier.height(4.dp))
-        Text(
-            if (searching) "No matches" else "No PDFs yet",
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(
-            if (searching) "Try a different file name."
-            else "Open a PDF or choose a folder to get started.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
+        Text(if (searching) "No matches" else "No PDFs yet", style = MaterialTheme.typography.titleMedium)
+        Text(if (searching) "Try a different file name." else "Open a PDF or scan a folder to get started.",
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center)
     }
 }

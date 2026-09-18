@@ -2,11 +2,13 @@ package com.alalkipgen.alalpdf.library
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.ArrayDeque
 
 class PdfLibraryRepository(private val context: Context) {
     private val resolver: ContentResolver = context.contentResolver
@@ -15,40 +17,73 @@ class PdfLibraryRepository(private val context: Context) {
         queryDocument(uri) ?: error("Unable to read PDF metadata")
     }
 
+    /** Recursively scans a user-approved Storage Access Framework folder. */
     suspend fun listFolder(treeUri: Uri): List<PdfDocument> = withContext(Dispatchers.IO) {
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-            treeUri, DocumentsContract.getTreeDocumentId(treeUri)
-        )
-        val result = mutableListOf<PdfDocument>()
-        resolver.query(
-            childrenUri,
-            arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-            null, null, null
-        )?.use { cursor ->
-            val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-            while (cursor.moveToNext()) {
-                val childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idIndex))
-                queryDocument(childUri)?.takeIf { it.name.endsWith(".pdf", ignoreCase = true) }?.let(result::add)
+        val result = linkedMapOf<String, PdfDocument>()
+        val pending = ArrayDeque<String>()
+        pending.add(DocumentsContract.getTreeDocumentId(treeUri))
+
+        while (pending.isNotEmpty()) {
+            val parentId = pending.removeFirst()
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+            resolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                    DocumentsContract.Document.COLUMN_SIZE,
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                ),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+                val modifiedIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getString(idIndex)
+                    val name = cursor.getString(nameIndex) ?: continue
+                    val mime = cursor.getString(mimeIndex)
+                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        pending.add(id)
+                    } else if (mime == "application/pdf" || name.endsWith(".pdf", ignoreCase = true)) {
+                        val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+                        result[uri.toString()] = PdfDocument(
+                            uri = uri,
+                            name = name,
+                            sizeBytes = if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else 0L,
+                            lastModified = if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex)) cursor.getLong(modifiedIndex) else 0L,
+                        )
+                    }
+                }
             }
         }
-        result.sortedBy { it.name.lowercase() }
+        result.values.sortedWith(compareByDescending<PdfDocument> { it.lastModified }.thenBy { it.name.lowercase() })
     }
 
     fun persistReadPermission(uri: Uri) {
         try {
-            resolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (_: SecurityException) {
-            // Some document providers grant temporary access only.
+            // ACTION_VIEW and some providers grant access only for this activity session.
+        } catch (_: IllegalArgumentException) {
+            // The provider does not support persistable grants.
         }
     }
 
-    /**
-     * A persisted tree permission also covers every document inside that tree,
-     * so files opened from the in-app folder browser are readable as well.
-     */
+    fun canRead(uri: Uri): Boolean = try {
+        resolver.openFileDescriptor(uri, "r")?.use { true } ?: false
+    } catch (_: Exception) {
+        false
+    }
+
     fun hasPersistedReadPermission(uri: Uri): Boolean {
         val target = uri.toString()
-        return context.contentResolver.persistedUriPermissions.any {
+        return resolver.persistedUriPermissions.any {
             it.isReadPermission && (it.uri == uri || target.startsWith(it.uri.toString()))
         }
     }
@@ -58,18 +93,21 @@ class PdfLibraryRepository(private val context: Context) {
             OpenableColumns.DISPLAY_NAME,
             OpenableColumns.SIZE,
             DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-            DocumentsContract.Document.COLUMN_MIME_TYPE
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
         )
         return resolver.query(uri, projection, null, null, null)?.use { cursor ->
             if (!cursor.moveToFirst()) return@use null
-            val name = cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)) ?: return@use null
-            val mime = cursor.getString(cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE))
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (nameIndex < 0) return@use null
+            val name = cursor.getString(nameIndex) ?: return@use null
+            val mimeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val mime = if (mimeIndex >= 0 && !cursor.isNull(mimeIndex)) cursor.getString(mimeIndex) else resolver.getType(uri)
             if (mime != "application/pdf" && !name.endsWith(".pdf", ignoreCase = true)) return@use null
             PdfDocument(
                 uri = uri,
                 name = name,
                 sizeBytes = cursor.getLongOrNull(OpenableColumns.SIZE) ?: 0L,
-                lastModified = cursor.getLongOrNull(DocumentsContract.Document.COLUMN_LAST_MODIFIED) ?: 0L
+                lastModified = cursor.getLongOrNull(DocumentsContract.Document.COLUMN_LAST_MODIFIED) ?: 0L,
             )
         }
     }
