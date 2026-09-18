@@ -18,6 +18,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
       - uses: actions/setup-gradle@v4
         with:
           gradle-home-cache-cleanup: true
