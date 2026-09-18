@@ -7,6 +7,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
@@ -55,7 +56,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 _uiState.value = PdfReaderUiState(isLoading = false, pageCount = count, pages = cache.snapshot())
                 if (count > 0) render(uri, initialPage.coerceIn(0, count - 1), width, currentGeneration, nightMode)
             }.onFailure {
-                if (it is kotlinx.coroutines.CancellationException) throw it
+                if (it is CancellationException) throw it
                 _uiState.value = PdfReaderUiState(isLoading = false, errorMessage = it.message ?: "Unable to open PDF")
             }
         }
@@ -70,19 +71,28 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
             publishPages()
             return
         }
-        if (renderJobs[pageIndex]?.isActive == true) return
-        renderJobs[pageIndex] = viewModelScope.launch(Dispatchers.IO) {
-            runCatching { repository.render(uri, pageIndex, width, nightMode) }.onSuccess { bitmap ->
-                if (expectedGeneration != generation || !isActive) return@onSuccess
-                cache.put(pageIndex, bitmap)
-                publishPages()
-            }.onFailure {
-                if (it is kotlinx.coroutines.CancellationException) throw it
-                if (expectedGeneration != generation) return@onFailure
-                _uiState.update { state -> state.copy(isLoading = false, errorMessage = it.message ?: "Unable to render page") }
-            }
-            renderJobs.remove(pageIndex)
+        // Only skip when a job for this page is genuinely still running. Finished
+        // or cancelled jobs used to stay in the map and blocked every retry, which
+        // left single pages spinning forever.
+        val existing = renderJobs[pageIndex]
+        if (existing != null && existing.isActive) return
+        val job = viewModelScope.launch(Dispatchers.IO) {
+            runCatching { repository.render(uri, pageIndex, width, nightMode) }
+                .onSuccess { bitmap ->
+                    if (expectedGeneration != generation || !isActive) return@onSuccess
+                    cache.put(pageIndex, bitmap)
+                    publishPages()
+                }
+                .onFailure {
+                    if (it is CancellationException) return@onFailure
+                    if (expectedGeneration != generation) return@onFailure
+                    _uiState.update { state ->
+                        state.copy(isLoading = false, errorMessage = it.message ?: "Unable to render page")
+                    }
+                }
         }
+        renderJobs[pageIndex] = job
+        job.invokeOnCompletion { renderJobs.remove(pageIndex, job) }
     }
 
     private fun publishPages() {
