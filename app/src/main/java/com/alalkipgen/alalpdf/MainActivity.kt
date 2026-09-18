@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.alalkipgen.alalpdf.create.CreatePdfScreen
 import com.alalkipgen.alalpdf.data.AlalPdfDatabase
 import com.alalkipgen.alalpdf.data.AlalPdfRepository
 import com.alalkipgen.alalpdf.library.FolderBrowserRoute
@@ -45,33 +46,57 @@ import com.alalkipgen.alalpdf.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private var incomingPdf by mutableStateOf<Uri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        incomingPdf = intent.pdfUri()
         setContent {
             var mode by rememberSaveable { mutableStateOf(ThemeMode.SYSTEM.name) }
             val theme = ThemeMode.valueOf(mode)
             AlalPdfTheme(theme) {
-                AppRoot(currentTheme = theme, onThemeChange = { mode = it.name })
+                AppRoot(
+                    currentTheme = theme,
+                    onThemeChange = { mode = it.name },
+                    incomingPdf = incomingPdf,
+                    onIncomingPdfConsumed = { incomingPdf = null },
+                )
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingPdf = intent.pdfUri()
+    }
+}
+
+private fun Intent.pdfUri(): Uri? {
+    if (action != Intent.ACTION_VIEW) return null
+    val uri = data ?: return null
+    val looksLikePdf = type == "application/pdf" || uri.lastPathSegment?.endsWith(".pdf", true) == true
+    return uri.takeIf { looksLikePdf }
 }
 
 private const val SCREEN_LIBRARY = "library"
 private const val SCREEN_FOLDER = "folder"
 private const val SCREEN_READER = "reader"
+private const val SCREEN_CREATE = "create"
 
 @Composable
-private fun AppRoot(currentTheme: ThemeMode, onThemeChange: (ThemeMode) -> Unit) {
+private fun AppRoot(
+    currentTheme: ThemeMode,
+    onThemeChange: (ThemeMode) -> Unit,
+    incomingPdf: Uri?,
+    onIncomingPdfConsumed: () -> Unit,
+) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val libraryRepository = remember(appContext) { PdfLibraryRepository(appContext) }
-    val dataRepository = remember(appContext) {
-        AlalPdfRepository(AlalPdfDatabase.create(appContext).dao())
-    }
+    val dataRepository = remember(appContext) { AlalPdfRepository(AlalPdfDatabase.create(appContext).dao()) }
     val recentStore = remember(dataRepository) { RecentDocumentsStore(dataRepository) }
-    val viewModel: LibraryViewModel =
-        viewModel(factory = LibraryViewModel.Factory(libraryRepository, recentStore))
+    val viewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory(libraryRepository, recentStore))
     val state by viewModel.uiState.collectAsState()
 
     var screen by rememberSaveable { mutableStateOf(SCREEN_LIBRARY) }
@@ -79,6 +104,15 @@ private fun AppRoot(currentTheme: ThemeMode, onThemeChange: (ThemeMode) -> Unit)
     var folderUri by rememberSaveable { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { viewModel.loadRecent() }
+    LaunchedEffect(incomingPdf) {
+        incomingPdf?.let { uri ->
+            libraryRepository.persistReadPermission(uri)
+            runCatching { libraryRepository.inspect(uri) }.onSuccess(viewModel::remember)
+            selectedUri = uri.toString()
+            screen = SCREEN_READER
+            onIncomingPdfConsumed()
+        }
+    }
 
     val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
@@ -97,44 +131,45 @@ private fun AppRoot(currentTheme: ThemeMode, onThemeChange: (ThemeMode) -> Unit)
     }
 
     when (screen) {
+        SCREEN_CREATE -> {
+            BackHandler { screen = SCREEN_LIBRARY }
+            CreatePdfScreen(
+                onBack = { screen = SCREEN_LIBRARY },
+                onCreated = { uri ->
+                    viewModel.openDocument(uri)
+                    selectedUri = uri.toString()
+                    screen = SCREEN_READER
+                },
+            )
+        }
         SCREEN_FOLDER -> {
             val tree = folderUri
-            if (tree == null) {
-                screen = SCREEN_LIBRARY
-            } else {
-                FolderBrowserRoute(
-                    treeUri = Uri.parse(tree),
-                    onBack = { screen = SCREEN_LIBRARY },
-                    onUseFolder = {
-                        viewModel.openFolder(Uri.parse(tree))
-                        screen = SCREEN_LIBRARY
-                    },
-                    onOpenFile = { document ->
-                        viewModel.remember(document)
-                        selectedUri = document.uri.toString()
-                        screen = SCREEN_READER
-                    },
-                )
-            }
+            if (tree == null) screen = SCREEN_LIBRARY else FolderBrowserRoute(
+                treeUri = Uri.parse(tree),
+                onBack = { screen = SCREEN_LIBRARY },
+                onUseFolder = { viewModel.openFolder(Uri.parse(tree)); screen = SCREEN_LIBRARY },
+                onOpenFile = { document ->
+                    viewModel.remember(document)
+                    selectedUri = document.uri.toString()
+                    screen = SCREEN_READER
+                },
+            )
         }
         SCREEN_READER -> {
             val current = selectedUri
-            if (current == null) {
-                screen = SCREEN_LIBRARY
-            } else {
-                ReaderRoute(
-                    uri = Uri.parse(current),
-                    libraryRepository = libraryRepository,
-                    dataRepository = dataRepository,
-                    onBack = { screen = SCREEN_LIBRARY; selectedUri = null },
-                )
-            }
+            if (current == null) screen = SCREEN_LIBRARY else ReaderRoute(
+                uri = Uri.parse(current),
+                libraryRepository = libraryRepository,
+                dataRepository = dataRepository,
+                onBack = { screen = SCREEN_LIBRARY; selectedUri = null },
+            )
         }
         else -> LibraryScreen(
             state = state,
             currentTheme = currentTheme,
             onOpenPdf = { pdfLauncher.launch(arrayOf("application/pdf")) },
             onOpenFolder = { folderLauncher.launch(null) },
+            onCreatePdf = { screen = SCREEN_CREATE },
             onThemeChange = onThemeChange,
             onOpenDocument = { document ->
                 viewModel.remember(document)
@@ -146,36 +181,29 @@ private fun AppRoot(currentTheme: ThemeMode, onThemeChange: (ThemeMode) -> Unit)
 }
 
 @Composable
-private fun ReaderRoute(
-    uri: Uri,
-    libraryRepository: PdfLibraryRepository,
-    dataRepository: AlalPdfRepository,
-    onBack: () -> Unit,
-) {
+private fun ReaderRoute(uri: Uri, libraryRepository: PdfLibraryRepository, dataRepository: AlalPdfRepository, onBack: () -> Unit) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val scope = rememberCoroutineScope()
 
-    if (!libraryRepository.hasPersistedReadPermission(uri)) {
+    if (!libraryRepository.canRead(uri)) {
         Text("This PDF permission is no longer available. Please open it again.")
         return
     }
 
     val readerViewModel: PdfReaderViewModel = viewModel(
-        factory = PdfReaderViewModel.Factory(PdfReaderRepository(context.contentResolver))
+        key = "reader-$uri",
+        factory = PdfReaderViewModel.Factory(PdfReaderRepository(context.contentResolver)),
     )
     readerViewModel.initialize(appContext)
     val readerState by readerViewModel.uiState.collectAsState()
     val progressStore = remember(dataRepository) { ReadingProgressStore(dataRepository) }
     val bookmarksViewModel: BookmarksViewModel = viewModel(
-        key = uri.toString(),
+        key = "bookmarks-$uri",
         factory = BookmarksViewModel.Factory(dataRepository, uri),
     )
     val bookmarks by bookmarksViewModel.bookmarks.collectAsState()
-
-    val width = with(LocalDensity.current) {
-        (LocalConfiguration.current.screenWidthDp.dp - 16.dp).roundToPx().coerceAtLeast(1)
-    }
+    val width = with(LocalDensity.current) { (LocalConfiguration.current.screenWidthDp.dp - 16.dp).roundToPx().coerceAtLeast(1) }
     var nightMode by rememberSaveable(uri.toString()) { mutableStateOf(false) }
     var title by remember(uri) { mutableStateOf("Document") }
     var initialPage by remember(uri) { mutableStateOf<Int?>(null) }
@@ -201,42 +229,30 @@ private fun ReaderRoute(
             pendingPage = pendingPage,
             onPendingPageConsumed = { pendingPage = null },
             onBack = onBack,
-            onNightModeChange = {
-                nightMode = it
-                readerViewModel.load(uri, width, currentPage, nightMode = it)
-            },
+            onNightModeChange = { nightMode = it; readerViewModel.load(uri, width, currentPage, nightMode = it) },
             onShare = {
-                context.startActivity(
-                    Intent.createChooser(
-                        Intent(Intent.ACTION_SEND).apply {
-                            type = "application/pdf"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        },
-                        "Share PDF",
-                    )
-                )
+                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                    type = "application/pdf"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }, "Share PDF"))
             },
             onOpenBookmarks = { showBookmarks = true },
             onAddBookmark = { bookmarksViewModel.add(currentPage) },
-            onPageSelected = { visiblePage ->
-                currentPage = visiblePage
-                scope.launch { progressStore.save(uri, visiblePage) }
-                readerViewModel.render(uri, visiblePage, width, nightMode)
+            onPageSelected = { page ->
+                currentPage = page
+                scope.launch { progressStore.save(uri, page) }
+                readerViewModel.render(uri, page, width, nightMode)
             },
-            onRender = { pageIndex -> readerViewModel.render(uri, pageIndex, width, nightMode) },
+            onRender = { page -> readerViewModel.render(uri, page, width, nightMode) },
         )
-
         if (showBookmarks) {
             BackHandler { showBookmarks = false }
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 BookmarksScreen(
                     bookmarks = bookmarks,
                     onBack = { showBookmarks = false },
-                    onOpenPage = { page ->
-                        pendingPage = page
-                        showBookmarks = false
-                    },
+                    onOpenPage = { page -> pendingPage = page; showBookmarks = false },
                     onDelete = bookmarksViewModel::delete,
                     onAddCurrentPage = { bookmarksViewModel.add(currentPage) },
                 )
