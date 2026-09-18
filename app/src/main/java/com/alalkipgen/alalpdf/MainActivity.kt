@@ -1,10 +1,4 @@
-Phase 6 — Reader experience
-- Jump to page
-- Page indicator
-- Light/dark/system theme
-- PDF night mode
-- Share/open-with actions
-- Accessibility improvementspackage com.alalkipgen.alalpdf
+package com.alalkipgen.alalpdf
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
