@@ -66,6 +66,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -123,7 +124,8 @@ fun PdfReaderScreen(
     var autoSpeed by remember { mutableFloatStateOf(2.5f) }
 
     // One zoom/pan state for the whole document, so the scale no longer resets
-    // every time a different page scrolls into view.
+    // every time a different page scrolls into view. The layer is scaled from its
+    // top-left corner, which keeps the top of the page reachable while zoomed.
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
 
@@ -327,6 +329,14 @@ fun PdfReaderScreen(
                                     onClick = { menuOpen = false; autoScroll = !autoScroll },
                                 )
                                 DropdownMenuItem(
+                                    text = { Text(if (scale > 1f) "Reset zoom" else "Zoom in") },
+                                    onClick = {
+                                        menuOpen = false
+                                        scale = if (scale > 1f) 1f else 2f
+                                        offsetX = 0f
+                                    },
+                                )
+                                DropdownMenuItem(
                                     text = { Text(if (fullScreen) "Exit full screen" else "Full screen") },
                                     onClick = { menuOpen = false; fullScreen = !fullScreen },
                                 )
@@ -418,17 +428,17 @@ fun PdfReaderScreen(
                                 do {
                                     val event = awaitPointerEvent(PointerEventPass.Initial)
                                     val pan = event.calculatePan()
-                                    val maxX = size.width * (scale - 1f) / 2f
                                     if (event.changes.size >= 2) {
                                         scale = (scale * event.calculateZoom()).coerceIn(1f, 5f)
-                                        offsetX = if (scale > 1f) {
-                                            (offsetX + pan.x).coerceIn(-maxX, maxX)
-                                        } else {
-                                            0f
-                                        }
+                                        // Content grows to the right when the layer is scaled
+                                        // from its top-left corner, so the pan range is
+                                        // -(extraWidth)..0 instead of a centred range.
+                                        val limit = size.width * (scale - 1f)
+                                        offsetX = if (scale > 1f) (offsetX + pan.x).coerceIn(-limit, 0f) else 0f
                                         event.changes.forEach { it.consume() }
                                     } else if (scale > 1f && abs(pan.x) > abs(pan.y)) {
-                                        offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
+                                        val limit = size.width * (scale - 1f)
+                                        offsetX = (offsetX + pan.x).coerceIn(-limit, 0f)
                                         event.changes.forEach { it.consume() }
                                     }
                                 } while (event.changes.any { it.pressed })
@@ -436,10 +446,17 @@ fun PdfReaderScreen(
                         }
                         .pointerInput(Unit) {
                             detectTapGestures(
-                                onDoubleTap = {
+                                onDoubleTap = { tap ->
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    scale = if (scale > 1f) 1f else 2.5f
-                                    offsetX = 0f
+                                    if (scale > 1f) {
+                                        scale = 1f
+                                        offsetX = 0f
+                                    } else {
+                                        scale = 2.5f
+                                        // Keep the tapped column under the finger.
+                                        val limit = size.width * (scale - 1f)
+                                        offsetX = (-tap.x * (scale - 1f)).coerceIn(-limit, 0f)
+                                    }
                                 }
                             )
                         }
@@ -449,6 +466,7 @@ fun PdfReaderScreen(
                             scaleX = scale
                             scaleY = scale
                             translationX = offsetX
+                            transformOrigin = TransformOrigin(0f, 0f)
                         }
                     ) {
                         LazyColumn(
@@ -484,13 +502,17 @@ fun PdfReaderScreen(
                                             modifier = Modifier.fillMaxWidth(),
                                         )
                                     } else {
-                                        // Full-height placeholder keeps LazyColumn from
-                                        // composing many pages at once on large PDFs.
+                                        // A plain page-shaped placeholder is far less
+                                        // distracting than a spinner while rendering.
                                         Box(
                                             Modifier.fillMaxWidth().height(560.dp),
                                             contentAlignment = Alignment.Center,
                                         ) {
-                                            CircularProgressIndicator()
+                                            Text(
+                                                (index + 1).toString(),
+                                                style = MaterialTheme.typography.titleLarge,
+                                                color = MaterialTheme.colorScheme.outlineVariant,
+                                            )
                                         }
                                     }
                                 }
@@ -502,6 +524,9 @@ fun PdfReaderScreen(
 
             if (fullScreen) {
                 BackHandler { fullScreen = false }
+            }
+            if (scale > 1f) {
+                BackHandler(enabled = !fullScreen) { scale = 1f; offsetX = 0f }
             }
 
             AnimatedVisibility(
