@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -90,6 +91,7 @@ private enum class LibraryFilter(val label: String) {
 @Composable
 fun LibraryScreen(
     state: LibraryUiState,
+    listState: LazyListState,
     currentTheme: ThemeMode,
     onOpenPdf: () -> Unit,
     onOpenFolder: () -> Unit,
@@ -232,36 +234,6 @@ fun LibraryScreen(
                 }
             }
 
-            if (filter == LibraryFilter.ALL && query.isBlank()) {
-                // Two equally useful entry points, side by side: scanning the
-                // whole phone and opening a single file with the system picker.
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    QuickActionCard(
-                        title = "Scan this phone",
-                        subtitle = "Find every PDF",
-                        icon = Icons.Default.PhoneAndroid,
-                        container = MaterialTheme.colorScheme.primaryContainer,
-                        accent = MaterialTheme.colorScheme.primary,
-                        onClick = onScanDevice,
-                    )
-                    QuickActionCard(
-                        title = "Open PDF",
-                        subtitle = "Pick a file",
-                        icon = Icons.Default.Description,
-                        container = MaterialTheme.colorScheme.secondaryContainer,
-                        accent = MaterialTheme.colorScheme.secondary,
-                        onClick = onOpenPdf,
-                    )
-                }
-            }
-
-            state.statusMessage?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-            }
-
             Box(Modifier.fillMaxSize()) {
                 when {
                     state.isLoading -> Column(
@@ -285,9 +257,27 @@ fun LibraryScreen(
                         onOpenPdf = onOpenPdf,
                     )
                     else -> LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         contentPadding = PaddingValues(bottom = 110.dp),
                     ) {
+                        if (filter == LibraryFilter.ALL && query.isBlank()) {
+                            item(key = "quick-actions") {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    QuickActionCard("Scan this phone", "Find every PDF", Icons.Default.PhoneAndroid,
+                                        MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary, onScanDevice)
+                                    QuickActionCard("Open PDF", "Pick a file", Icons.Default.Description,
+                                        MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.secondary, onOpenPdf)
+                                }
+                            }
+                        }
+                        state.statusMessage?.let { message ->
+                            item(key = "status-message") {
+                                Text(message, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
                         item(key = "files-header") { SectionLabel("PDF FILES") }
                         items(documents, key = { it.uri.toString() }) { document ->
                             DocumentRow(document, onOpenDocument, onToggleFavorite,
