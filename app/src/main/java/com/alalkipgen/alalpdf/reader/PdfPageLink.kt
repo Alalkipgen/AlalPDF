@@ -6,6 +6,7 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.interactive.action.PDActionURI
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink
 
+/** Clickable web annotation bounds normalized to the rendered page. */
 data class PdfPageLink(val left: Float, val top: Float, val right: Float, val bottom: Float, val url: String)
 
 internal object PdfLinkExtractor {
