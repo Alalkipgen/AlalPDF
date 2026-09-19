@@ -13,6 +13,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -66,6 +67,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -81,7 +83,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,11 +124,12 @@ fun PdfReaderScreen(
     var autoScroll by remember { mutableStateOf(false) }
     var autoSpeed by remember { mutableFloatStateOf(2.5f) }
 
-    // One zoom/pan state for the whole document, so the scale no longer resets
-    // every time a different page scrolls into view. The layer is scaled from its
-    // top-left corner, which keeps the top of the page reachable while zoomed.
+    // One zoom/pan state for the whole document. The layer is scaled from its
+    // top-left corner and the offsets are corrected against the pinch centroid,
+    // so the page grows around the fingers instead of from the top edge.
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
 
     // derivedStateOf keeps the top bar and pill from recomposing on every pixel
     // of scroll, which makes long documents noticeably smoother.
@@ -334,6 +336,7 @@ fun PdfReaderScreen(
                                         menuOpen = false
                                         scale = if (scale > 1f) 1f else 2f
                                         offsetX = 0f
+                                        offsetY = 0f
                                     },
                                 )
                                 DropdownMenuItem(
@@ -429,17 +432,38 @@ fun PdfReaderScreen(
                                     val event = awaitPointerEvent(PointerEventPass.Initial)
                                     val pan = event.calculatePan()
                                     if (event.changes.size >= 2) {
-                                        scale = (scale * event.calculateZoom()).coerceIn(1f, 5f)
-                                        // Content grows to the right when the layer is scaled
-                                        // from its top-left corner, so the pan range is
-                                        // -(extraWidth)..0 instead of a centred range.
-                                        val limit = size.width * (scale - 1f)
-                                        offsetX = if (scale > 1f) (offsetX + pan.x).coerceIn(-limit, 0f) else 0f
+                                        val previous = scale
+                                        val next = (previous * event.calculateZoom()).coerceIn(1f, 5f)
+                                        val centroid = event.calculateCentroid(useCurrent = true)
+                                        // Keep the point between the fingers pinned in place
+                                        // so the page zooms where the user pinches.
+                                        if (centroid != Offset.Unspecified && next != previous) {
+                                            val ratio = next / previous
+                                            offsetX = centroid.x - (centroid.x - offsetX) * ratio
+                                            offsetY = centroid.y - (centroid.y - offsetY) * ratio
+                                        }
+                                        scale = next
+                                        if (scale > 1f) {
+                                            val limitX = size.width * (scale - 1f)
+                                            val limitY = size.height * (scale - 1f)
+                                            offsetX = (offsetX + pan.x).coerceIn(-limitX, 0f)
+                                            offsetY = (offsetY + pan.y).coerceIn(-limitY, 0f)
+                                        } else {
+                                            offsetX = 0f
+                                            offsetY = 0f
+                                        }
                                         event.changes.forEach { it.consume() }
-                                    } else if (scale > 1f && abs(pan.x) > abs(pan.y)) {
-                                        val limit = size.width * (scale - 1f)
-                                        offsetX = (offsetX + pan.x).coerceIn(-limit, 0f)
-                                        event.changes.forEach { it.consume() }
+                                    } else if (scale > 1f) {
+                                        val limitX = size.width * (scale - 1f)
+                                        val limitY = size.height * (scale - 1f)
+                                        val nextX = (offsetX + pan.x).coerceIn(-limitX, 0f)
+                                        val nextY = (offsetY + pan.y).coerceIn(-limitY, 0f)
+                                        val moved = nextX != offsetX || nextY != offsetY
+                                        offsetX = nextX
+                                        offsetY = nextY
+                                        // Swallow the drag only while the zoomed page can still
+                                        // move; at the edges the list keeps scrolling normally.
+                                        if (moved) event.changes.forEach { it.consume() }
                                     }
                                 } while (event.changes.any { it.pressed })
                             }
@@ -451,11 +475,14 @@ fun PdfReaderScreen(
                                     if (scale > 1f) {
                                         scale = 1f
                                         offsetX = 0f
+                                        offsetY = 0f
                                     } else {
                                         scale = 2.5f
-                                        // Keep the tapped column under the finger.
-                                        val limit = size.width * (scale - 1f)
-                                        offsetX = (-tap.x * (scale - 1f)).coerceIn(-limit, 0f)
+                                        // Keep the tapped point under the finger.
+                                        val limitX = size.width * (scale - 1f)
+                                        val limitY = size.height * (scale - 1f)
+                                        offsetX = (-tap.x * (scale - 1f)).coerceIn(-limitX, 0f)
+                                        offsetY = (-tap.y * (scale - 1f)).coerceIn(-limitY, 0f)
                                     }
                                 }
                             )
@@ -466,6 +493,7 @@ fun PdfReaderScreen(
                             scaleX = scale
                             scaleY = scale
                             translationX = offsetX
+                            translationY = offsetY
                             transformOrigin = TransformOrigin(0f, 0f)
                         }
                     ) {
@@ -526,7 +554,7 @@ fun PdfReaderScreen(
                 BackHandler { fullScreen = false }
             }
             if (scale > 1f) {
-                BackHandler(enabled = !fullScreen) { scale = 1f; offsetX = 0f }
+                BackHandler(enabled = !fullScreen) { scale = 1f; offsetX = 0f; offsetY = 0f }
             }
 
             AnimatedVisibility(
