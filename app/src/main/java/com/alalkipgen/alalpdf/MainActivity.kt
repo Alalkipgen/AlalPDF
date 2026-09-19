@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.alalkipgen.alalpdf.create.CreatePdfMode
 import com.alalkipgen.alalpdf.create.CreatePdfScreen
 import com.alalkipgen.alalpdf.data.AlalPdfDatabase
 import com.alalkipgen.alalpdf.data.AlalPdfRepository
@@ -112,6 +113,7 @@ private fun AppRoot(
     var screen by rememberSaveable { mutableStateOf(SCREEN_LIBRARY) }
     var selectedUri by rememberSaveable { mutableStateOf<String?>(null) }
     var folderUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var createMode by rememberSaveable { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { viewModel.loadRecent() }
     LaunchedEffect(incomingPdf) {
@@ -166,14 +168,16 @@ private fun AppRoot(
 
     when (screen) {
         SCREEN_CREATE -> {
-            BackHandler { screen = SCREEN_LIBRARY }
+            BackHandler { screen = SCREEN_LIBRARY; createMode = null }
             CreatePdfScreen(
-                onBack = { screen = SCREEN_LIBRARY },
+                onBack = { screen = SCREEN_LIBRARY; createMode = null },
                 onCreated = { uri ->
                     viewModel.openDocument(uri)
                     selectedUri = uri.toString()
+                    createMode = null
                     screen = SCREEN_READER
                 },
+                initialMode = createMode?.let { runCatching { CreatePdfMode.valueOf(it) }.getOrNull() },
             )
         }
         SCREEN_FOLDER -> {
@@ -205,7 +209,7 @@ private fun AppRoot(
             onOpenPdf = { pdfLauncher.launch(arrayOf("application/pdf")) },
             onOpenFolder = { folderLauncher.launch(null) },
             onScanDevice = { requestDeviceScan() },
-            onCreatePdf = { screen = SCREEN_CREATE },
+            onCreatePdf = { mode -> createMode = mode?.name; screen = SCREEN_CREATE },
             onThemeChange = onThemeChange,
             onSortChange = viewModel::setSort,
             onOpenDocument = { document ->
