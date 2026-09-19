@@ -30,10 +30,10 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DocumentScanner
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -86,6 +86,7 @@ fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModePicker(onBack: () -> Unit, onPick: (CreatePdfMode) -> Unit) {
+    BackHandler { onBack() }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -127,7 +128,7 @@ private fun ModeCard(title: String, subtitle: String, icon: ImageVector, onClick
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Row(
@@ -183,16 +184,12 @@ private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri)
         if (uris.isNotEmpty()) {
             images = images + uris
             if (mode == CreatePdfMode.IMAGES) buildPreview()
-        } else if (mode == CreatePdfMode.IMAGES && images.isEmpty()) {
-            onBack()
         }
     }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         if (bitmap != null) {
             scans = scans + bitmap
             buildPreview()
-        } else if (scans.isEmpty()) {
-            onBack()
         }
     }
     val output = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
@@ -221,6 +218,7 @@ private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri)
 
     val preview = previewFile
     if (preview != null) {
+        // Back from the preview returns to the editor, never straight home.
         BackHandler { previewFile = null }
         Scaffold(
             topBar = {
@@ -261,6 +259,9 @@ private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri)
         return
     }
 
+    // Back from the editor returns to the Text / Image / Text+Image / Scan picker.
+    BackHandler { onBack() }
+
     val heading = when (mode) {
         CreatePdfMode.TEXT -> "New note"
         CreatePdfMode.IMAGES -> "Selected images"
@@ -278,45 +279,63 @@ private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri)
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { buildPreview() },
-                icon = { Icon(Icons.Default.Image, null) },
+                icon = { Icon(Icons.Default.Visibility, null) },
                 text = { Text(if (busy) "Building\u2026" else "Preview") },
             )
         },
     ) { padding ->
         Column(
             Modifier.fillMaxSize().padding(padding).padding(horizontal = 18.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (mode == CreatePdfMode.TEXT || mode == CreatePdfMode.IMAGE_TEXT) {
-                TextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    placeholder = { Text("Title", style = MaterialTheme.typography.headlineSmall) },
-                    textStyle = MaterialTheme.typography.headlineSmall,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = noteFieldColors(),
-                )
-                TextField(
-                    value = body,
-                    onValueChange = { body = it },
-                    placeholder = { Text("Start writing\u2026") },
-                    modifier = Modifier.fillMaxWidth().height(340.dp),
-                    colors = noteFieldColors(),
-                )
+                // Paper-like writing card, the pattern used by note and scanner apps.
+                Card(
+                    Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                ) {
+                    Column(Modifier.padding(6.dp)) {
+                        TextField(
+                            value = title,
+                            onValueChange = { title = it },
+                            placeholder = { Text("Title", style = MaterialTheme.typography.headlineSmall) },
+                            textStyle = MaterialTheme.typography.headlineSmall,
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = noteFieldColors(),
+                        )
+                        TextField(
+                            value = body,
+                            onValueChange = { body = it },
+                            placeholder = { Text("Start writing\u2026") },
+                            modifier = Modifier.fillMaxWidth().height(320.dp),
+                            colors = noteFieldColors(),
+                        )
+                    }
+                }
             }
 
             if (mode == CreatePdfMode.IMAGES || mode == CreatePdfMode.IMAGE_TEXT) {
                 if (images.isNotEmpty()) {
+                    Text(
+                        images.size.toString() + " image" + (if (images.size == 1) "" else "s"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(images.size) { index ->
                             Box {
-                                LocalImage(
-                                    images[index],
+                                Surface(
                                     Modifier
                                         .size(width = 84.dp, height = 104.dp)
                                         .padding(top = 6.dp, end = 6.dp),
-                                )
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                ) {
+                                    LocalImage(images[index], Modifier.fillMaxSize())
+                                }
                                 IconButton(
                                     onClick = { images = images.filterIndexed { i, _ -> i != index } },
                                     modifier = Modifier.align(Alignment.TopEnd).size(24.dp),
@@ -327,7 +346,11 @@ private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri)
                         }
                     }
                 }
-                FilledTonalButton(onClick = { imagePicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
+                FilledTonalButton(
+                    onClick = { imagePicker.launch("image/*") },
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
                     Icon(Icons.Default.AddPhotoAlternate, null)
                     Spacer(Modifier.width(8.dp))
                     Text(if (images.isEmpty()) "Add images" else "Add more images")
@@ -336,18 +359,33 @@ private fun CreateFlow(mode: CreatePdfMode, onBack: () -> Unit, onCreated: (Uri)
 
             if (mode == CreatePdfMode.SCAN) {
                 if (scans.isNotEmpty()) {
+                    Text(
+                        scans.size.toString() + " page" + (if (scans.size == 1) "" else "s") + " scanned",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(scans.size) { index ->
-                            Image(
-                                bitmap = scans[index].asImageBitmap(),
-                                contentDescription = "Page " + (index + 1),
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.size(width = 84.dp, height = 104.dp),
-                            )
+                            Surface(
+                                Modifier.size(width = 84.dp, height = 104.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                            ) {
+                                Image(
+                                    bitmap = scans[index].asImageBitmap(),
+                                    contentDescription = "Page " + (index + 1),
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
                         }
                     }
                 }
-                FilledTonalButton(onClick = { camera.launch(null) }, modifier = Modifier.fillMaxWidth()) {
+                FilledTonalButton(
+                    onClick = { camera.launch(null) },
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
                     Icon(Icons.Default.AddAPhoto, null)
                     Spacer(Modifier.width(8.dp))
                     Text(if (scans.isEmpty()) "Open camera" else "Scan another page")
