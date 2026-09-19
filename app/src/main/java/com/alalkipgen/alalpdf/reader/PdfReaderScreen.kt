@@ -14,23 +14,27 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
-import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DarkMode
@@ -66,11 +70,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -104,6 +105,7 @@ fun PdfReaderScreen(
     onRender: (Int) -> Unit,
 ) {
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage.coerceAtLeast(0))
+    val horizontalScroll = rememberScrollState()
     val haptics = LocalHapticFeedback.current
     val view = LocalView.current
     val context = LocalContext.current
@@ -124,12 +126,11 @@ fun PdfReaderScreen(
     var autoScroll by remember { mutableStateOf(false) }
     var autoSpeed by remember { mutableFloatStateOf(2.5f) }
 
-    // One zoom/pan state for the whole document. The layer is scaled from its
-    // top-left corner and the offsets are corrected against the pinch centroid,
-    // so the page grows around the fingers instead of from the top edge.
+    // Zoom is applied to the *content width* instead of a graphics layer. The
+    // list therefore keeps its own native vertical fling and a plain horizontal
+    // scroll container handles panning, which removes the stutter and the old
+    // "only one or two pages can be reached while zoomed" limitation.
     var scale by remember { mutableFloatStateOf(1f) }
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
 
     // derivedStateOf keeps the top bar and pill from recomposing on every pixel
     // of scroll, which makes long documents noticeably smoother.
@@ -335,8 +336,6 @@ fun PdfReaderScreen(
                                     onClick = {
                                         menuOpen = false
                                         scale = if (scale > 1f) 1f else 2f
-                                        offsetX = 0f
-                                        offsetY = 0f
                                     },
                                 )
                                 DropdownMenuItem(
@@ -421,49 +420,36 @@ fun PdfReaderScreen(
                     CircularProgressIndicator()
                     Text("Opening document\u2026", style = MaterialTheme.typography.bodyMedium)
                 }
-                else -> Box(
+                else -> BoxWithConstraints(
                     Modifier
                         .fillMaxSize()
-                        .clipToBounds()
                         .pointerInput(Unit) {
                             awaitEachGesture {
                                 awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                 do {
                                     val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    val pan = event.calculatePan()
+                                    // Only two-finger gestures are intercepted; single
+                                    // finger drags stay with the list so scrolling and
+                                    // flinging keep their native feel.
                                     if (event.changes.size >= 2) {
-                                        val previous = scale
-                                        val next = (previous * event.calculateZoom()).coerceIn(1f, 5f)
-                                        val centroid = event.calculateCentroid(useCurrent = true)
-                                        // Keep the point between the fingers pinned in place
-                                        // so the page zooms where the user pinches.
-                                        if (centroid != Offset.Unspecified && next != previous) {
+                                        val zoom = event.calculateZoom()
+                                        if (zoom != 1f) {
+                                            val previous = scale
+                                            val next = (previous * zoom).coerceIn(1f, 6f)
                                             val ratio = next / previous
-                                            offsetX = centroid.x - (centroid.x - offsetX) * ratio
-                                            offsetY = centroid.y - (centroid.y - offsetY) * ratio
-                                        }
-                                        scale = next
-                                        if (scale > 1f) {
-                                            val limitX = size.width * (scale - 1f)
-                                            val limitY = size.height * (scale - 1f)
-                                            offsetX = (offsetX + pan.x).coerceIn(-limitX, 0f)
-                                            offsetY = (offsetY + pan.y).coerceIn(-limitY, 0f)
-                                        } else {
-                                            offsetX = 0f
-                                            offsetY = 0f
+                                            val centroid = event.calculateCentroid(useCurrent = true)
+                                            scale = next
+                                            if (ratio != 1f && centroid != Offset.Unspecified) {
+                                                // Keep the point between the fingers pinned.
+                                                horizontalScroll.dispatchRawDelta(
+                                                    (horizontalScroll.value + centroid.x) * (ratio - 1f)
+                                                )
+                                                listState.dispatchRawDelta(
+                                                    (listState.firstVisibleItemScrollOffset + centroid.y) * (ratio - 1f)
+                                                )
+                                            }
                                         }
                                         event.changes.forEach { it.consume() }
-                                    } else if (scale > 1f) {
-                                        val limitX = size.width * (scale - 1f)
-                                        val limitY = size.height * (scale - 1f)
-                                        val nextX = (offsetX + pan.x).coerceIn(-limitX, 0f)
-                                        val nextY = (offsetY + pan.y).coerceIn(-limitY, 0f)
-                                        val moved = nextX != offsetX || nextY != offsetY
-                                        offsetX = nextX
-                                        offsetY = nextY
-                                        // Swallow the drag only while the zoomed page can still
-                                        // move; at the edges the list keeps scrolling normally.
-                                        if (moved) event.changes.forEach { it.consume() }
                                     }
                                 } while (event.changes.any { it.pressed })
                             }
@@ -472,76 +458,69 @@ fun PdfReaderScreen(
                             detectTapGestures(
                                 onDoubleTap = { tap ->
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    if (scale > 1f) {
-                                        scale = 1f
-                                        offsetX = 0f
-                                        offsetY = 0f
-                                    } else {
-                                        scale = 2.5f
-                                        // Keep the tapped point under the finger.
-                                        val limitX = size.width * (scale - 1f)
-                                        val limitY = size.height * (scale - 1f)
-                                        offsetX = (-tap.x * (scale - 1f)).coerceIn(-limitX, 0f)
-                                        offsetY = (-tap.y * (scale - 1f)).coerceIn(-limitY, 0f)
-                                    }
+                                    val previous = scale
+                                    val next = if (previous > 1f) 1f else 2.5f
+                                    val ratio = next / previous
+                                    scale = next
+                                    horizontalScroll.dispatchRawDelta(
+                                        (horizontalScroll.value + tap.x) * (ratio - 1f)
+                                    )
+                                    listState.dispatchRawDelta(
+                                        (listState.firstVisibleItemScrollOffset + tap.y) * (ratio - 1f)
+                                    )
                                 }
                             )
                         }
                 ) {
-                    Box(
-                        Modifier.fillMaxSize().graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                            translationX = offsetX
-                            translationY = offsetY
-                            transformOrigin = TransformOrigin(0f, 0f)
-                        }
+                    val pageWidth = maxWidth * scale
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .horizontalScroll(horizontalScroll)
+                            .width(pageWidth),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            items(state.pageCount, key = { index -> index }) { index ->
-                                val bitmap = state.pages[index]
-                                // Retry while the page is still missing. A single
-                                // dropped render request used to leave one page
-                                // spinning forever.
-                                LaunchedEffect(index, nightMode, bitmap == null) {
-                                    if (bitmap == null) {
-                                        var attempts = 0
-                                        while (attempts < 30) {
-                                            onRender(index)
-                                            attempts++
-                                            delay(700)
-                                        }
+                        items(state.pageCount, key = { index -> index }) { index ->
+                            val bitmap = state.pages[index]
+                            // Retry while the page is still missing. A single
+                            // dropped render request used to leave one page
+                            // spinning forever.
+                            LaunchedEffect(index, nightMode, bitmap == null) {
+                                if (bitmap == null) {
+                                    var attempts = 0
+                                    while (attempts < 30) {
+                                        onRender(index)
+                                        attempts++
+                                        delay(700)
                                     }
                                 }
-                                Surface(
-                                    Modifier.fillMaxWidth(),
-                                    tonalElevation = 2.dp,
-                                    shadowElevation = 2.dp,
-                                ) {
-                                    if (bitmap != null) {
-                                        Image(
-                                            bitmap = bitmap.asImageBitmap(),
-                                            contentDescription = "Page " + (index + 1),
-                                            modifier = Modifier.fillMaxWidth(),
+                            }
+                            Surface(
+                                Modifier.fillMaxWidth(),
+                                tonalElevation = 2.dp,
+                                shadowElevation = 2.dp,
+                            ) {
+                                if (bitmap != null) {
+                                    Image(
+                                        bitmap = bitmap.asImageBitmap(),
+                                        contentDescription = "Page " + (index + 1),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        contentScale = ContentScale.FillWidth,
+                                    )
+                                } else {
+                                    // A plain page-shaped placeholder is far less
+                                    // distracting than a spinner while rendering.
+                                    Box(
+                                        Modifier.fillMaxWidth().height(560.dp * scale),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            (index + 1).toString(),
+                                            style = MaterialTheme.typography.titleLarge,
+                                            color = MaterialTheme.colorScheme.outlineVariant,
                                         )
-                                    } else {
-                                        // A plain page-shaped placeholder is far less
-                                        // distracting than a spinner while rendering.
-                                        Box(
-                                            Modifier.fillMaxWidth().height(560.dp),
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            Text(
-                                                (index + 1).toString(),
-                                                style = MaterialTheme.typography.titleLarge,
-                                                color = MaterialTheme.colorScheme.outlineVariant,
-                                            )
-                                        }
                                     }
                                 }
                             }
@@ -554,7 +533,7 @@ fun PdfReaderScreen(
                 BackHandler { fullScreen = false }
             }
             if (scale > 1f) {
-                BackHandler(enabled = !fullScreen) { scale = 1f; offsetX = 0f; offsetY = 0f }
+                BackHandler(enabled = !fullScreen) { scale = 1f }
             }
 
             AnimatedVisibility(
