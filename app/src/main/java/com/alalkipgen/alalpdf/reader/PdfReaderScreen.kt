@@ -11,11 +11,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -28,7 +31,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -66,6 +71,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -77,6 +83,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
@@ -84,6 +91,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -109,15 +117,20 @@ fun PdfReaderScreen(
     val haptics = LocalHapticFeedback.current
     val view = LocalView.current
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
     val activity = remember(context) { context.findActivity() }
 
     var jumpOpen by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var jumpText by remember { mutableStateOf("") }
     var requestedPage by remember { mutableStateOf<Int?>(null) }
-    var showPill by remember { mutableStateOf(false) }
-    var dragging by remember { mutableStateOf(false) }
-    var sliderValue by remember { mutableFloatStateOf(initialPage.toFloat()) }
+
+    // The scrollbar and the page pill only appear while the document is moving
+    // and fade away again about two seconds after scrolling stops.
+    var chromeVisible by remember { mutableStateOf(false) }
+    var thumbDragging by remember { mutableStateOf(false) }
+    var dragFraction by remember { mutableFloatStateOf(0f) }
 
     var keepScreenOn by remember { mutableStateOf(true) }
     var lockRotation by remember { mutableStateOf(false) }
@@ -173,9 +186,6 @@ fun PdfReaderScreen(
             onPendingPageConsumed()
         }
     }
-    LaunchedEffect(visiblePage, dragging) {
-        if (!dragging) sliderValue = visiblePage.toFloat()
-    }
     LaunchedEffect(listState) {
         snapshotFlow { listState.firstVisibleItemIndex }
             .distinctUntilChanged()
@@ -184,11 +194,19 @@ fun PdfReaderScreen(
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
             if (scrolling) {
-                showPill = true
+                chromeVisible = true
             } else {
-                delay(1500)
-                showPill = false
+                delay(2000)
+                chromeVisible = false
             }
+        }
+    }
+    LaunchedEffect(thumbDragging) {
+        if (thumbDragging) {
+            chromeVisible = true
+        } else {
+            delay(2000)
+            chromeVisible = false
         }
     }
     LaunchedEffect(autoScroll, autoSpeed) {
@@ -357,54 +375,29 @@ fun PdfReaderScreen(
             }
         },
         bottomBar = {
-            if (!fullScreen && state.pageCount > 1) {
+            // The permanent page slider is gone. Only the auto-scroll speed
+            // control appears, and only while auto-scroll is running.
+            if (!fullScreen && autoScroll) {
                 Surface(tonalElevation = 3.dp) {
-                    Column {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("1", style = MaterialTheme.typography.labelSmall)
-                            Slider(
-                                value = sliderValue.coerceIn(0f, lastIndex.toFloat()),
-                                onValueChange = { value ->
-                                    if (value.roundToInt() != sliderValue.roundToInt()) {
-                                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    }
-                                    dragging = true
-                                    sliderValue = value
-                                },
-                                onValueChangeFinished = {
-                                    dragging = false
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    requestedPage = sliderValue.roundToInt()
-                                },
-                                valueRange = 0f..lastIndex.toFloat(),
-                                modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                            )
-                            Text(state.pageCount.toString(), style = MaterialTheme.typography.labelSmall)
-                        }
-                        if (autoScroll) {
-                            Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text("Speed", style = MaterialTheme.typography.labelSmall)
-                                Slider(
-                                    value = autoSpeed,
-                                    onValueChange = { autoSpeed = it },
-                                    valueRange = 0.5f..15f,
-                                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
-                                )
-                                TextButton(onClick = { autoScroll = false }) { Text("Stop") }
-                            }
-                        }
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Speed", style = MaterialTheme.typography.labelSmall)
+                        Slider(
+                            value = autoSpeed,
+                            onValueChange = { autoSpeed = it },
+                            valueRange = 0.5f..15f,
+                            modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                        )
+                        TextButton(onClick = { autoScroll = false }) { Text("Stop") }
                     }
                 }
             }
         },
     ) { contentPadding ->
-        Box(Modifier.fillMaxSize().padding(contentPadding)) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(contentPadding)) {
+            val viewportHeight = maxHeight
             when {
                 state.errorMessage != null -> Text(
                     state.errorMessage,
@@ -536,11 +529,71 @@ fun PdfReaderScreen(
                 BackHandler(enabled = !fullScreen) { scale = 1f }
             }
 
+            // Google Drive style scrollbar: it slides along the right edge while
+            // the document moves, can be dragged to jump through the file, and
+            // disappears on its own once scrolling stops.
+            if (state.pageCount > 1) {
+                val thumbHeight = 56.dp
+                val trackHeight = (viewportHeight - thumbHeight).coerceAtLeast(0.dp)
+                val fraction = if (thumbDragging) {
+                    dragFraction
+                } else if (lastIndex == 0) {
+                    0f
+                } else {
+                    (visiblePage.toFloat() / lastIndex).coerceIn(0f, 1f)
+                }
+                AnimatedVisibility(
+                    visible = chromeVisible || thumbDragging,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(y = trackHeight * fraction),
+                ) {
+                    Surface(
+                        shape = MaterialTheme.shapes.large,
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shadowElevation = 4.dp,
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(width = 40.dp, height = thumbHeight)
+                            .draggable(
+                                orientation = Orientation.Vertical,
+                                state = rememberDraggableState { delta ->
+                                    val trackPx = with(density) { trackHeight.toPx() }.coerceAtLeast(1f)
+                                    dragFraction = (dragFraction + delta / trackPx).coerceIn(0f, 1f)
+                                    val target = (dragFraction * lastIndex).roundToInt().coerceIn(0, lastIndex)
+                                    if (target != visiblePage) {
+                                        scope.launch { listState.scrollToItem(target) }
+                                    }
+                                },
+                                onDragStarted = {
+                                    dragFraction = if (lastIndex == 0) 0f else visiblePage.toFloat() / lastIndex
+                                    thumbDragging = true
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                },
+                                onDragStopped = {
+                                    thumbDragging = false
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                },
+                            ),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                (visiblePage + 1).toString(),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        }
+                    }
+                }
+            }
+
             AnimatedVisibility(
-                visible = showPill && state.pageCount > 0,
+                visible = thumbDragging && state.pageCount > 0,
                 enter = fadeIn(),
                 exit = fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+                modifier = Modifier.align(Alignment.Center),
             ) {
                 Surface(
                     shape = MaterialTheme.shapes.large,
@@ -548,9 +601,9 @@ fun PdfReaderScreen(
                 ) {
                     Text(
                         (visiblePage + 1).toString() + " / " + state.pageCount,
-                        Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
                         color = MaterialTheme.colorScheme.inverseOnSurface,
-                        style = MaterialTheme.typography.labelLarge,
+                        style = MaterialTheme.typography.titleMedium,
                     )
                 }
             }
