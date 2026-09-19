@@ -1,7 +1,7 @@
 name: Apply approved fixes
 on:
-  push:
-    branches: [fix-library-editor-pdf-links]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
