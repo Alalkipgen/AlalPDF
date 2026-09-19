@@ -34,6 +34,13 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     private val renderJobs = ConcurrentHashMap<Int, Job>()
     private lateinit var cache: BitmapPageCache
 
+    // Remembering what is already loaded lets a configuration change (rotation)
+    // reuse every rendered page instead of clearing the cache and flashing a
+    // blank document while everything re-renders.
+    private var loadedUri: String? = null
+    private var loadedWidth = 0
+    private var loadedNightMode = false
+
     fun initialize(context: Context) {
         if (!::cache.isInitialized) {
             val memoryClass = (context.getSystemService(ActivityManager::class.java)?.memoryClass ?: 128) * 1024 * 1024
@@ -44,10 +51,24 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     fun load(uri: Uri, width: Int, initialPage: Int = 0, nightMode: Boolean = false) {
+        val key = uri.toString()
+        if (key == loadedUri && nightMode == loadedNightMode && _uiState.value.pageCount > 0) {
+            // Same document, same rendering mode: this is a rotation or a simple
+            // recomposition. Keep the pages that are already on screen and only
+            // widen the render size when the viewport grew.
+            loadedWidth = maxOf(loadedWidth, width)
+            publishPages()
+            renderWindow(uri, initialPage, loadedWidth, nightMode)
+            return
+        }
+
         loadJob?.cancel()
         renderJobs.values.forEach(Job::cancel)
         renderJobs.clear()
         if (::cache.isInitialized) cache.clear()
+        loadedUri = key
+        loadedWidth = width
+        loadedNightMode = nightMode
         val currentGeneration = ++generation
         loadJob = viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = PdfReaderUiState()
@@ -74,7 +95,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
      * every loading placeholder while scrolling continuously.
      */
     fun renderWindow(uri: Uri, pageIndex: Int, width: Int, nightMode: Boolean = false) =
-        renderWindow(uri, pageIndex, width, generation, nightMode)
+        renderWindow(uri, pageIndex, maxOf(width, loadedWidth), generation, nightMode)
 
     private fun renderWindow(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int, nightMode: Boolean) {
         render(uri, pageIndex, width, expectedGeneration, nightMode)
@@ -86,6 +107,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
     private fun render(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int, nightMode: Boolean = false) {
         if (pageIndex !in 0 until _uiState.value.pageCount) return
+        if (!::cache.isInitialized) return
         if (cache.get(pageIndex) != null) {
             publishPages()
             return
@@ -115,6 +137,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     private fun publishPages() {
+        if (!::cache.isInitialized) return
         val snapshot = cache.snapshot()
         _uiState.update { state -> state.copy(isLoading = false, pages = snapshot) }
     }
