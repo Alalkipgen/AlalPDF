@@ -32,6 +32,14 @@ class LibraryPrefs(context: Context) {
         if (current.remove(uri)) prefs.edit().putStringSet(KEY_HIDDEN, current).apply()
     }
 
+    /**
+     * Forgets every removed entry. A fresh scan is an explicit request to see
+     * the files again, so the hidden list must not survive it.
+     */
+    fun clearHidden() {
+        prefs.edit().putStringSet(KEY_HIDDEN, emptySet()).apply()
+    }
+
     fun pageCount(uri: String): Int = prefs.getInt("pages:$uri", 0)
 
     fun setPageCount(uri: String, count: Int) {
