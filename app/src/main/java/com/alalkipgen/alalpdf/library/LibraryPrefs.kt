@@ -32,10 +32,7 @@ class LibraryPrefs(context: Context) {
         if (current.remove(uri)) prefs.edit().putStringSet(KEY_HIDDEN, current).apply()
     }
 
-    /**
-     * Forgets every removed entry. A fresh scan is an explicit request to see
-     * the files again, so the hidden list must not survive it.
-     */
+    /** A fresh scan should always show everything again, even after "Clear list". */
     fun clearHidden() {
         prefs.edit().putStringSet(KEY_HIDDEN, emptySet()).apply()
     }

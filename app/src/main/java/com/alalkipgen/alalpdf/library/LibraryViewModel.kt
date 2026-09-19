@@ -42,9 +42,9 @@ class LibraryViewModel(
 
     fun openFolder(uri: Uri) {
         viewModelScope.launch {
-            // Asking for a folder again means the user wants to see it again.
-            prefs.clearHidden()
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+            // A folder scan is an explicit request to see those files again.
+            prefs.clearHidden()
             runCatching { repository.listFolder(uri) }
                 .onSuccess {
                     scannedDocuments = it
@@ -62,10 +62,10 @@ class LibraryViewModel(
     /** Scans the whole device for PDFs. */
     fun scanDevice() {
         viewModelScope.launch {
-            // A fresh scan must show everything again, even files that were
-            // removed from the list earlier with "Clear list".
-            prefs.clearHidden()
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+            // "Clear list" only hides entries. Without this reset a second scan
+            // reported the file count but showed an empty library.
+            prefs.clearHidden()
             runCatching { deviceScan.scan() }
                 .onSuccess {
                     deviceDocuments = it
@@ -114,7 +114,7 @@ class LibraryViewModel(
         prefs.hide(_uiState.value.documents.map { it.uri.toString() })
         scannedDocuments = emptyList()
         deviceDocuments = emptyList()
-        publish(status = "List cleared \u00b7 Scan this phone to bring files back")
+        publish(status = "List cleared. Scan again to bring files back.")
     }
 
     fun delete(document: PdfDocument) {
