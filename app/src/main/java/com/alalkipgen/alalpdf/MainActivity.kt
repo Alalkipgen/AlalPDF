@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -109,6 +110,7 @@ private fun AppRoot(
         factory = LibraryViewModel.Factory(libraryRepository, recentStore, prefs, deviceScan)
     )
     val state by viewModel.uiState.collectAsState()
+    val libraryListState = rememberLazyListState()
 
     var screen by rememberSaveable { mutableStateOf(SCREEN_LIBRARY) }
     var selectedUri by rememberSaveable { mutableStateOf<String?>(null) }
@@ -205,6 +207,7 @@ private fun AppRoot(
         }
         else -> LibraryScreen(
             state = state,
+            listState = libraryListState,
             currentTheme = currentTheme,
             onOpenPdf = { pdfLauncher.launch(arrayOf("application/pdf")) },
             onOpenFolder = { folderLauncher.launch(null) },
@@ -257,64 +260,67 @@ private fun ReaderRoute(
     val bookmarks by bookmarksViewModel.bookmarks.collectAsState()
     val width = with(LocalDensity.current) { (LocalConfiguration.current.screenWidthDp.dp - 16.dp).roundToPx().coerceAtLeast(1) }
     var nightMode by rememberSaveable(uri.toString()) { mutableStateOf(false) }
-    var title by remember(uri) { mutableStateOf("Document") }
-    var initialPage by remember(uri) { mutableStateOf<Int?>(null) }
-    var currentPage by remember(uri) { mutableStateOf(0) }
-    var pendingPage by remember(uri) { mutableStateOf<Int?>(null) }
+    var title by rememberSaveable(uri.toString()) { mutableStateOf("Document") }
+    var currentPage by rememberSaveable(uri.toString()) { mutableStateOf(0) }
+    var positionLoaded by rememberSaveable(uri.toString()) { mutableStateOf(false) }
+    var pendingPage by rememberSaveable(uri.toString()) { mutableStateOf<Int?>(null) }
     var showBookmarks by rememberSaveable(uri.toString()) { mutableStateOf(false) }
 
     LaunchedEffect(uri) {
         runCatching { libraryRepository.inspect(uri).name }.getOrNull()?.let { title = it }
-        val page = progressStore.page(uri)
-        currentPage = page
-        initialPage = page
-        readerViewModel.load(uri, width, page, nightMode)
+        if (!positionLoaded) {
+            val page = progressStore.page(uri)
+            currentPage = page
+            pendingPage = page
+            positionLoaded = true
+        }
+    }
+    LaunchedEffect(uri, width, positionLoaded) {
+        if (positionLoaded) readerViewModel.load(uri, width, currentPage, nightMode)
     }
     LaunchedEffect(readerState.pageCount) {
         if (readerState.pageCount > 0) prefs.setPageCount(uri.toString(), readerState.pageCount)
     }
 
-    initialPage?.let { startPage ->
-        BackHandler(enabled = !showBookmarks) { onBack() }
-        PdfReaderScreen(
-            state = readerState,
-            title = title,
-            initialPage = startPage,
-            nightMode = nightMode,
-            pendingPage = pendingPage,
-            onPendingPageConsumed = { pendingPage = null },
-            onBack = onBack,
-            onNightModeChange = { nightMode = it; readerViewModel.load(uri, width, currentPage, nightMode = it) },
-            onShare = {
-                runCatching {
-                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                        type = "application/pdf"
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }, "Share PDF"))
-                }
-            },
-            onPrint = { PdfPrinter.print(context, uri, title) },
-            onOpenBookmarks = { showBookmarks = true },
-            onAddBookmark = { bookmarksViewModel.add(currentPage) },
-            onPageSelected = { page ->
-                currentPage = page
-                scope.launch { progressStore.save(uri, page) }
-                readerViewModel.renderWindow(uri, page, width, nightMode)
-            },
-            onRender = { page -> readerViewModel.renderWindow(uri, page, width, nightMode) },
-        )
-        if (showBookmarks) {
-            BackHandler { showBookmarks = false }
-            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                BookmarksScreen(
-                    bookmarks = bookmarks,
-                    onBack = { showBookmarks = false },
-                    onOpenPage = { page -> pendingPage = page; showBookmarks = false },
-                    onDelete = bookmarksViewModel::delete,
-                    onAddCurrentPage = { bookmarksViewModel.add(currentPage) },
-                )
+    BackHandler(enabled = !showBookmarks) { onBack() }
+    PdfReaderScreen(
+        state = readerState,
+        title = title,
+    initialPage = currentPage,
+        nightMode = nightMode,
+        pendingPage = pendingPage,
+        onPendingPageConsumed = { pendingPage = null },
+        onBack = onBack,
+    onNightModeChange = { nightMode = it },
+        onShare = {
+            runCatching {
+                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                    type = "application/pdf"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }, "Share PDF"))
             }
+        },
+        onPrint = { PdfPrinter.print(context, uri, title) },
+        onOpenBookmarks = { showBookmarks = true },
+        onAddBookmark = { bookmarksViewModel.add(currentPage) },
+        onPageSelected = { page ->
+            currentPage = page
+            scope.launch { progressStore.save(uri, page) }
+            readerViewModel.renderWindow(uri, page, width, nightMode)
+        },
+        onRender = { page -> readerViewModel.renderWindow(uri, page, width, nightMode) },
+    )
+    if (showBookmarks) {
+        BackHandler { showBookmarks = false }
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            BookmarksScreen(
+                bookmarks = bookmarks,
+                onBack = { showBookmarks = false },
+                onOpenPage = { page -> pendingPage = page; showBookmarks = false },
+                onDelete = bookmarksViewModel::delete,
+                onAddCurrentPage = { bookmarksViewModel.add(currentPage) },
+            )
         }
     }
 }

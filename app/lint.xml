@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+      PdfReaderScreen deliberately draws the document at fixed full-screen bounds
+      and overlays its auto-hiding toolbar. Applying Scaffold's changing padding
+      would make the PDF jump whenever reader chrome is shown or hidden.
+    -->
+    <issue id="UnusedMaterial3ScaffoldPaddingParameter">
+        <ignore path="src/main/java/com/alalkipgen/alalpdf/reader/PdfReaderScreen.kt" />
+    </issue>
+</lint>
