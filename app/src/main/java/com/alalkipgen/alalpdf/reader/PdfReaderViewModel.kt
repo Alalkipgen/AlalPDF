@@ -61,7 +61,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
     @Volatile private var generation = 0
     @Volatile private var loadedUri: String? = null
-    @Volatile private var loadedWidth = 0
+    @Volatile private var focusedPage = 0
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -72,10 +72,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     fun initialize(context: Context) {
         if (!::cache.isInitialized) {
             val memoryClass = (context.getSystemService(ActivityManager::class.java)?.memoryClass ?: 128) * 1024 * 1024
-            cache = BitmapPageCache(memoryClass / 4) { index ->
-                renderedWidths.remove(index)
-                Snapshot.withMutableSnapshot { pages.remove(index) }
-            }
+            cache = BitmapPageCache(memoryClass / 4)
         }
     }
 
@@ -83,7 +80,6 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         if (!::cache.isInitialized) return
         val key = uri.toString()
         if (key == loadedUri && _uiState.value.pageCount > 0) {
-            loadedWidth = maxOf(loadedWidth, width)
             renderWindow(uri, initialPage, width, nightMode)
             return
         }
@@ -91,7 +87,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         generation++
         val currentGeneration = generation
         loadedUri = key
-        loadedWidth = width
+        focusedPage = initialPage.coerceAtLeast(0)
         synchronized(queueLock) { queue.clear(); queuedPages.clear() }
         cache.clear()
         renderedWidths.clear()
@@ -109,7 +105,10 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                     errorMessage = null,
                 ) }
                 if (count > 0) requestWindow(
-                    uri, initialPage.coerceIn(0, count - 1), width, currentGeneration
+                    uri,
+                    initialPage.coerceIn(0, count - 1),
+                    width,
+                    currentGeneration,
                 )
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -126,17 +125,32 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         requestWindow(uri, pageIndex.coerceIn(0, count - 1), width, generation)
     }
 
+    /** Requests a composed placeholder without changing which page is pinned. */
+    fun requestPage(uri: Uri, pageIndex: Int, width: Int) {
+        val count = _uiState.value.pageCount
+        if (count <= 0 || uri.toString() != loadedUri) return
+        val safePage = pageIndex.coerceIn(0, count - 1)
+        val distance = abs(safePage - focusedPage)
+        if (distance > DISPLAY_DISTANCE) return
+        synchronized(queueLock) {
+            enqueueLocked(uri, safePage, renderWidth(width), generation, distance)
+        }
+        wakeUp.trySend(Unit)
+    }
+
     private fun requestWindow(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int) {
-        val safeWidth = width.coerceAtLeast(1)
+        focusedPage = pageIndex
+        pruneDisplayedPages(pageIndex)
+        val safeWidth = renderWidth(width)
         synchronized(queueLock) {
             val stale = queue.filter {
-                it.generation != expectedGeneration || abs(it.page - pageIndex) > PREFETCH_DISTANCE
+                it.generation != expectedGeneration || abs(it.page - pageIndex) > DISPLAY_DISTANCE
             }
             if (stale.isNotEmpty()) {
                 queue.removeAll(stale.toSet())
                 stale.forEach { queuedPages.remove(it.generation to it.page) }
             }
-            listOf(pageIndex, pageIndex + 1, pageIndex - 1, pageIndex + 2, pageIndex - 2)
+            listOf(pageIndex, pageIndex + 1, pageIndex - 1)
                 .forEachIndexed { priority, page ->
                     enqueueLocked(uri, page, safeWidth, expectedGeneration, priority)
                 }
@@ -146,7 +160,14 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
     private fun enqueueLocked(uri: Uri, page: Int, width: Int, expectedGeneration: Int, priority: Int) {
         if (page !in 0 until _uiState.value.pageCount) return
-        if (cache.get(page) != null && (renderedWidths[page] ?: 0) >= width) return
+        if (pages[page] != null && (renderedWidths[page] ?: 0) >= width) return
+
+        val cached = cache.get(page)
+        if (cached != null && (renderedWidths[page] ?: 0) >= width) {
+            Snapshot.withMutableSnapshot { pages[page] = cached }
+            return
+        }
+
         val key = expectedGeneration to page
         val existing = queue.firstOrNull { it.generation == expectedGeneration && it.page == page }
         if (existing != null) {
@@ -164,20 +185,36 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 queue.poll()?.also { queuedPages.remove(it.generation to it.page) }
             } ?: return
             if (request.generation != generation || request.uri.toString() != loadedUri) continue
-            if (cache.get(request.page) != null && (renderedWidths[request.page] ?: 0) >= request.width) continue
+            if (pages[request.page] != null && (renderedWidths[request.page] ?: 0) >= request.width) continue
+
             runCatching { repository.render(request.uri, request.page, request.width) }
                 .onSuccess { bitmap ->
                     if (request.generation != generation) return@onSuccess
                     cache.put(request.page, bitmap)
                     renderedWidths[request.page] = request.width
-                    Snapshot.withMutableSnapshot {
-                        pageAspectRatios[request.page] = bitmap.height.toFloat() / bitmap.width.coerceAtLeast(1)
-                        pages[request.page] = bitmap
+
+                    // Retain the old portrait bitmap until the wider landscape
+                    // render completes, then replace it in one snapshot.
+                    if (abs(request.page - focusedPage) <= DISPLAY_DISTANCE) {
+                        Snapshot.withMutableSnapshot {
+                            pageAspectRatios[request.page] = bitmap.height.toFloat() / bitmap.width.coerceAtLeast(1)
+                            pages[request.page] = bitmap
+                        }
                     }
                 }
                 .onFailure { error -> if (error is CancellationException) throw error }
         }
     }
+
+    private fun pruneDisplayedPages(centerPage: Int) {
+        Snapshot.withMutableSnapshot {
+            pages.keys
+                .filter { abs(it - centerPage) > DISPLAY_DISTANCE }
+                .forEach { pages.remove(it) }
+        }
+    }
+
+    private fun renderWidth(width: Int): Int = width.coerceIn(1, MAX_RENDER_WIDTH_PX)
 
     override fun onCleared() {
         generation++
@@ -194,5 +231,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         override fun <T : ViewModel> create(modelClass: Class<T>): T = PdfReaderViewModel(repository) as T
     }
 
-    private companion object { const val PREFETCH_DISTANCE = 3 }
+    private companion object {
+        const val DISPLAY_DISTANCE = 1
+        const val MAX_RENDER_WIDTH_PX = 1_400
+    }
 }

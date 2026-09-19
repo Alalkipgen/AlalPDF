@@ -4,26 +4,19 @@ import android.graphics.Bitmap
 import android.util.LruCache
 
 /**
- * Caches rendered PDF pages.
+ * Byte-bounded cache for rendered PDF pages.
  *
- * Bitmaps are never recycled here. Evicted entries may still be referenced by
- * the UI while a recomposition is in flight, and recycling them caused
- * "Canvas: trying to use a recycled bitmap" crashes while scrolling. Dropping
- * the reference is enough; the garbage collector reclaims the memory.
+ * Cache eviction only releases the cache reference. It must never remove the
+ * bitmap currently displayed by Compose: in landscape a single ARGB page can
+ * exceed the cache budget and coupling eviction to UI state causes a visible
+ * render/blank/render loop.
  *
- * [onEvicted] lets the view model drop the matching entry from the UI state map
- * so the list never holds on to pages the cache has already released.
+ * Bitmaps are not recycled here because Compose may still be drawing an
+ * evicted bitmap. The garbage collector reclaims it after the UI releases it.
  */
-class BitmapPageCache(
-    maxMemoryBytes: Int,
-    private val onEvicted: (Int) -> Unit = {},
-) {
+class BitmapPageCache(maxMemoryBytes: Int) {
     private val cache = object : LruCache<Int, Bitmap>(maxMemoryBytes.coerceAtLeast(1)) {
         override fun sizeOf(key: Int, value: Bitmap): Int = value.allocationByteCount
-
-        override fun entryRemoved(evicted: Boolean, key: Int, oldValue: Bitmap, newValue: Bitmap?) {
-            if (evicted && newValue == null) onEvicted(key)
-        }
     }
 
     @Synchronized fun get(page: Int): Bitmap? = cache.get(page)
@@ -32,8 +25,6 @@ class BitmapPageCache(
         cache.put(page, bitmap)
         return bitmap
     }
-
-    @Synchronized fun snapshot(): Map<Int, Bitmap> = cache.snapshot()
 
     @Synchronized fun clear() {
         cache.evictAll()
