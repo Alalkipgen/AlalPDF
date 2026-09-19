@@ -7,6 +7,7 @@ import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -30,6 +31,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -38,11 +41,11 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.abs
 
 /**
  * Renders a locally generated PDF so the user can check it before saving.
- * Supports pinch zoom, double tap zoom and horizontal pan while zoomed in.
+ * Pages fill the available width and zooming follows the finger centroid,
+ * exactly like the reader.
  */
 @Composable
 fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
@@ -51,10 +54,11 @@ fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
     var loading by remember(file.path, stamp) { mutableStateOf(true) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(file.path, stamp) {
         loading = true
-        pages = withContext(Dispatchers.IO) { renderPages(file, 1000) }
+        pages = withContext(Dispatchers.IO) { renderPages(file, 1400) }
         loading = false
     }
 
@@ -78,22 +82,50 @@ fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
                             do {
                                 val event = awaitPointerEvent(PointerEventPass.Initial)
                                 val pan = event.calculatePan()
-                                val maxX = size.width * (scale - 1f) / 2f
+                                val limitX = { size.width * (scale - 1f) }
+                                val limitY = { size.height * (scale - 1f) }
                                 if (event.changes.size >= 2) {
-                                    scale = (scale * event.calculateZoom()).coerceIn(1f, 5f)
-                                    offsetX = if (scale > 1f) (offsetX + pan.x).coerceIn(-maxX, maxX) else 0f
+                                    val previous = scale
+                                    val next = (previous * event.calculateZoom()).coerceIn(1f, 5f)
+                                    val centroid = event.calculateCentroid(useCurrent = true)
+                                    if (centroid != Offset.Unspecified && next != previous) {
+                                        val ratio = next / previous
+                                        offsetX = centroid.x - (centroid.x - offsetX) * ratio
+                                        offsetY = centroid.y - (centroid.y - offsetY) * ratio
+                                    }
+                                    scale = next
+                                    if (scale > 1f) {
+                                        offsetX = (offsetX + pan.x).coerceIn(-limitX(), 0f)
+                                        offsetY = (offsetY + pan.y).coerceIn(-limitY(), 0f)
+                                    } else {
+                                        offsetX = 0f
+                                        offsetY = 0f
+                                    }
                                     event.changes.forEach { it.consume() }
-                                } else if (scale > 1f && abs(pan.x) > abs(pan.y)) {
-                                    offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
-                                    event.changes.forEach { it.consume() }
+                                } else if (scale > 1f) {
+                                    val nextX = (offsetX + pan.x).coerceIn(-limitX(), 0f)
+                                    val nextY = (offsetY + pan.y).coerceIn(-limitY(), 0f)
+                                    val moved = nextX != offsetX || nextY != offsetY
+                                    offsetX = nextX
+                                    offsetY = nextY
+                                    // Only swallow the gesture while the zoomed page can
+                                    // still move, so the list keeps scrolling at the edges.
+                                    if (moved) event.changes.forEach { it.consume() }
                                 }
                             } while (event.changes.any { it.pressed })
                         }
                     }
                     .pointerInput(Unit) {
-                        detectTapGestures(onDoubleTap = {
-                            scale = if (scale > 1f) 1f else 2.5f
-                            offsetX = 0f
+                        detectTapGestures(onDoubleTap = { tap ->
+                            if (scale > 1f) {
+                                scale = 1f
+                                offsetX = 0f
+                                offsetY = 0f
+                            } else {
+                                scale = 2.5f
+                                offsetX = (-tap.x * (scale - 1f)).coerceIn(-size.width * (scale - 1f), 0f)
+                                offsetY = (-tap.y * (scale - 1f)).coerceIn(-size.height * (scale - 1f), 0f)
+                            }
                         })
                     }
             ) {
@@ -104,8 +136,10 @@ fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
                             scaleX = scale
                             scaleY = scale
                             translationX = offsetX
+                            translationY = offsetY
+                            transformOrigin = TransformOrigin(0f, 0f)
                         },
-                    contentPadding = PaddingValues(12.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(pages.size) { index ->
