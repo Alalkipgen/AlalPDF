@@ -43,8 +43,6 @@ class LibraryViewModel(
     fun openFolder(uri: Uri) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            // A folder scan is an explicit request to see those files again.
-            prefs.clearHidden()
             runCatching { repository.listFolder(uri) }
                 .onSuccess {
                     scannedDocuments = it
@@ -63,9 +61,6 @@ class LibraryViewModel(
     fun scanDevice() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            // "Clear list" only hides entries. Without this reset a second scan
-            // reported the file count but showed an empty library.
-            prefs.clearHidden()
             runCatching { deviceScan.scan() }
                 .onSuccess {
                     deviceDocuments = it
@@ -83,8 +78,10 @@ class LibraryViewModel(
     fun loadRecent() {
         if (recentJob != null) return
         recentJob = viewModelScope.launch {
-            recentStore.recent.collect {
-                recentDocuments = it
+            recentStore.recent.collect { documents ->
+                val (readable, stale) = documents.partition { repository.canRead(it.uri) }
+                stale.forEach { recentStore.remove(it.uri) }
+                recentDocuments = readable
                 publish()
             }
         }
@@ -114,17 +111,18 @@ class LibraryViewModel(
         prefs.hide(_uiState.value.documents.map { it.uri.toString() })
         scannedDocuments = emptyList()
         deviceDocuments = emptyList()
-        publish(status = "List cleared. Scan again to bring files back.")
+        publish(status = "List cleared")
     }
 
     fun delete(document: PdfDocument) {
         viewModelScope.launch {
             val deleted = runCatching { repository.delete(document.uri) }.getOrDefault(false)
-            if (deleted) {
+            if (deleted || !repository.canRead(document.uri)) {
                 scannedDocuments = scannedDocuments.filterNot { it.uri == document.uri }
                 deviceDocuments = deviceDocuments.filterNot { it.uri == document.uri }
-                prefs.hide(listOf(document.uri.toString()))
-                publish(status = "Deleted ${document.name}")
+                recentStore.remove(document.uri)
+                prefs.removeMetadata(document.uri.toString())
+                publish(status = if (deleted) "Deleted ${document.name}" else "Removed missing file")
             } else {
                 publish(status = "This file cannot be deleted from Alal PDF")
             }

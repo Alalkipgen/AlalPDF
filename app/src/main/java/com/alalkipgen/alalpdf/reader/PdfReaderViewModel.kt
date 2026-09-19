@@ -30,6 +30,7 @@ data class PdfReaderUiState(
     val pages: SnapshotStateMap<Int, Bitmap> = mutableStateMapOf(),
     val pageAspectRatios: SnapshotStateMap<Int, Float> = mutableStateMapOf(),
     val defaultAspectRatio: Float = 1.414f,
+    val pageLinks: Map<Int, List<PdfPageLink>> = emptyMap(),
     val errorMessage: String? = null,
 )
 
@@ -110,6 +111,9 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                     width,
                     currentGeneration,
                 )
+                runCatching { repository.links(uri) }.onSuccess { links ->
+                    if (currentGeneration == generation) _uiState.update { state -> state.copy(pageLinks = links) }
+                }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 if (currentGeneration == generation) _uiState.update { state ->
