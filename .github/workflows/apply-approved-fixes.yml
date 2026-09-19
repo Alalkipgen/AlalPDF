@@ -1,0 +1,23 @@
+name: Apply approved fixes
+on:
+  push:
+    branches: [fix-library-editor-pdf-links]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix-library-editor-pdf-links
+      - name: Apply patch
+        run: |
+          git apply .github/remaining-approved-fixes.patch
+          rm .github/remaining-approved-fixes.patch .github/workflows/apply-approved-fixes.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: finish library and reader behavior"
+          git push
