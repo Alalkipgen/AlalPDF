@@ -5,25 +5,35 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- PDF page body -->
-    <path
-        android:fillColor="#E53935"
-        android:pathData="M34,20 h30 l14,14 v54 a4,4 0 0 1 -4,4 h-40 a4,4 0 0 1 -4,-4 v-64 a4,4 0 0 1 4,-4 z" />
-    <!-- Folded corner -->
-    <path
-        android:fillColor="#FF8A80"
-        android:pathData="M64,20 l14,14 h-14 z" />
-
-    <!-- Letter A -->
+    <!-- Document outline with folded corner -->
     <path
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="5"
+        android:strokeWidth="5.5"
         android:strokeLineCap="round"
         android:strokeLineJoin="round"
-        android:pathData="M46,72 L54,44 L62,72" />
+        android:pathData="M39,28 L61,28 L75,42 L75,80 C75,82.2 73.2,84 71,84 L39,84 C36.8,84 35,82.2 35,80 L35,32 C35,29.8 36.8,28 39,28 Z" />
+
+    <!-- Folded corner -->
     <path
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="4.5"
+        android:strokeWidth="5.5"
         android:strokeLineCap="round"
-        android:pathData="M49.5,63 L58.5,63" />
+        android:strokeLineJoin="round"
+        android:pathData="M61,28 L61,38 C61,40.2 62.8,42 65,42 L75,42" />
+
+    <!-- Pencil body -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M71,49 L79,57 L60,76 L50,78 L52,68 Z" />
+
+    <!-- Pencil ferrule -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5.5"
+        android:strokeLineCap="round"
+        android:pathData="M66,54 L74,62" />
 </vector>
