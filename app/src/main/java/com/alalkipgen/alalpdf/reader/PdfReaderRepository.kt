@@ -28,6 +28,10 @@ class PdfReaderRepository(private val resolver: ContentResolver) {
             synchronized(lock) { ensureOpen(uri).renderPage(pageIndex, width, nightMode) }
         }
 
+    suspend fun links(uri: Uri): Map<Int, List<PdfPageLink>> = withContext(Dispatchers.IO) {
+        PdfLinkExtractor.extract(resolver, uri)
+    }
+
     fun close() {
         synchronized(lock) {
             runCatching { source?.close() }

@@ -37,6 +37,12 @@ class LibraryPrefs(context: Context) {
         prefs.edit().putStringSet(KEY_HIDDEN, emptySet()).apply()
     }
 
+    fun removeMetadata(uri: String) {
+        val favoriteSet = favorites().toMutableSet().apply { remove(uri) }
+        val hiddenSet = hidden().toMutableSet().apply { remove(uri) }
+        prefs.edit().putStringSet(KEY_FAVORITES, favoriteSet).putStringSet(KEY_HIDDEN, hiddenSet).remove("pages:$uri").apply()
+    }
+
     fun pageCount(uri: String): Int = prefs.getInt("pages:$uri", 0)
 
     fun setPageCount(uri: String, count: Int) {

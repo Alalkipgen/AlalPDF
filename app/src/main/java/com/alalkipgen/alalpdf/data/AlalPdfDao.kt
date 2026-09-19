@@ -41,4 +41,7 @@ interface AlalPdfDao {
 
     @Query("DELETE FROM bookmarks WHERE documentUri = :uri AND pageIndex = :page")
     suspend fun deleteBookmark(uri: String, page: Int)
+
+    @Query("DELETE FROM bookmarks WHERE documentUri = :uri")
+    suspend fun deleteBookmarks(uri: String)
 }

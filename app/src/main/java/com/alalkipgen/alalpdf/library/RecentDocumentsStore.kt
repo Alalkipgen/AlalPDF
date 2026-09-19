@@ -10,4 +10,5 @@ class RecentDocumentsStore(private val repository: AlalPdfRepository) {
         list.map { PdfDocument(Uri.parse(it.uri), it.displayName, it.sizeBytes, it.lastModified, it.lastReadPage) }
     }
     suspend fun add(document: PdfDocument) = repository.remember(document)
+    suspend fun remove(uri: Uri) = repository.forget(uri)
 }
