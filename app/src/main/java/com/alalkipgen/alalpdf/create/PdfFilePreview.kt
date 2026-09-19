@@ -8,15 +8,20 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
-import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,13 +35,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -44,8 +47,9 @@ import java.io.File
 
 /**
  * Renders a locally generated PDF so the user can check it before saving.
- * Pages fill the available width and zooming follows the finger centroid,
- * exactly like the reader.
+ * Pages fill the available width and zoom follows the pinch centroid by
+ * growing the content itself, exactly like the reader, so scrolling stays
+ * smooth and every page can still be reached while zoomed in.
  */
 @Composable
 fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
@@ -53,8 +57,8 @@ fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
     var pages by remember(file.path, stamp) { mutableStateOf<List<Bitmap>>(emptyList()) }
     var loading by remember(file.path, stamp) { mutableStateOf(true) }
     var scale by remember { mutableFloatStateOf(1f) }
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
+    val listState = rememberLazyListState()
+    val horizontalScroll = rememberScrollState()
 
     LaunchedEffect(file.path, stamp) {
         loading = true
@@ -72,74 +76,59 @@ fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
                 Modifier.align(Alignment.Center),
                 color = MaterialTheme.colorScheme.error,
             )
-            else -> Box(
+            else -> BoxWithConstraints(
                 Modifier
                     .fillMaxSize()
-                    .clipToBounds()
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                             do {
                                 val event = awaitPointerEvent(PointerEventPass.Initial)
-                                val pan = event.calculatePan()
-                                val limitX = { size.width * (scale - 1f) }
-                                val limitY = { size.height * (scale - 1f) }
+                                // Only two-finger gestures are intercepted; single finger
+                                // drags stay with the list and the horizontal scroller.
                                 if (event.changes.size >= 2) {
-                                    val previous = scale
-                                    val next = (previous * event.calculateZoom()).coerceIn(1f, 5f)
-                                    val centroid = event.calculateCentroid(useCurrent = true)
-                                    if (centroid != Offset.Unspecified && next != previous) {
+                                    val zoom = event.calculateZoom()
+                                    if (zoom != 1f) {
+                                        val previous = scale
+                                        val next = (previous * zoom).coerceIn(1f, 6f)
                                         val ratio = next / previous
-                                        offsetX = centroid.x - (centroid.x - offsetX) * ratio
-                                        offsetY = centroid.y - (centroid.y - offsetY) * ratio
-                                    }
-                                    scale = next
-                                    if (scale > 1f) {
-                                        offsetX = (offsetX + pan.x).coerceIn(-limitX(), 0f)
-                                        offsetY = (offsetY + pan.y).coerceIn(-limitY(), 0f)
-                                    } else {
-                                        offsetX = 0f
-                                        offsetY = 0f
+                                        val centroid = event.calculateCentroid(useCurrent = true)
+                                        scale = next
+                                        if (ratio != 1f && centroid != Offset.Unspecified) {
+                                            horizontalScroll.dispatchRawDelta(
+                                                (horizontalScroll.value + centroid.x) * (ratio - 1f)
+                                            )
+                                            listState.dispatchRawDelta(
+                                                (listState.firstVisibleItemScrollOffset + centroid.y) * (ratio - 1f)
+                                            )
+                                        }
                                     }
                                     event.changes.forEach { it.consume() }
-                                } else if (scale > 1f) {
-                                    val nextX = (offsetX + pan.x).coerceIn(-limitX(), 0f)
-                                    val nextY = (offsetY + pan.y).coerceIn(-limitY(), 0f)
-                                    val moved = nextX != offsetX || nextY != offsetY
-                                    offsetX = nextX
-                                    offsetY = nextY
-                                    // Only swallow the gesture while the zoomed page can
-                                    // still move, so the list keeps scrolling at the edges.
-                                    if (moved) event.changes.forEach { it.consume() }
                                 }
                             } while (event.changes.any { it.pressed })
                         }
                     }
                     .pointerInput(Unit) {
                         detectTapGestures(onDoubleTap = { tap ->
-                            if (scale > 1f) {
-                                scale = 1f
-                                offsetX = 0f
-                                offsetY = 0f
-                            } else {
-                                scale = 2.5f
-                                offsetX = (-tap.x * (scale - 1f)).coerceIn(-size.width * (scale - 1f), 0f)
-                                offsetY = (-tap.y * (scale - 1f)).coerceIn(-size.height * (scale - 1f), 0f)
-                            }
+                            val previous = scale
+                            val next = if (previous > 1f) 1f else 2.5f
+                            val ratio = next / previous
+                            scale = next
+                            horizontalScroll.dispatchRawDelta((horizontalScroll.value + tap.x) * (ratio - 1f))
+                            listState.dispatchRawDelta(
+                                (listState.firstVisibleItemScrollOffset + tap.y) * (ratio - 1f)
+                            )
                         })
                     }
             ) {
+                val pageWidth = maxWidth * scale
                 LazyColumn(
-                    Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                            translationX = offsetX
-                            translationY = offsetY
-                            transformOrigin = TransformOrigin(0f, 0f)
-                        },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .horizontalScroll(horizontalScroll)
+                        .width(pageWidth),
+                    contentPadding = PaddingValues(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(pages.size) { index ->
@@ -148,6 +137,7 @@ fun PdfFilePreview(file: File, modifier: Modifier = Modifier) {
                                 bitmap = pages[index].asImageBitmap(),
                                 contentDescription = "Preview page " + (index + 1),
                                 modifier = Modifier.fillMaxWidth(),
+                                contentScale = ContentScale.FillWidth,
                             )
                         }
                     }
