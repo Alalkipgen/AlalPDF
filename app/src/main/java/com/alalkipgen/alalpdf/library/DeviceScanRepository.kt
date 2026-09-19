@@ -57,6 +57,8 @@ class DeviceScanRepository(private val context: Context) {
                     val size = if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else 0L
                     val modified = if (dateIndex >= 0 && !cursor.isNull(dateIndex)) cursor.getLong(dateIndex) * 1000L else 0L
                     val uri = ContentUris.withAppendedId(collection, cursor.getLong(idIndex))
+                    val readable = runCatching { context.contentResolver.openFileDescriptor(uri, "r")?.use { true } ?: false }.getOrDefault(false)
+                    if (!readable) continue
                     val key = key(name, size)
                     if (!found.containsKey(key)) {
                         found[key] = PdfDocument(uri = uri, name = name, sizeBytes = size, lastModified = modified)

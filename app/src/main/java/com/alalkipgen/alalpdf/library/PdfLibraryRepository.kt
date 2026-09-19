@@ -66,6 +66,13 @@ class PdfLibraryRepository(private val context: Context) {
         result.values.sortedWith(compareByDescending<PdfDocument> { it.lastModified }.thenBy { it.name.lowercase() })
     }
 
+    fun persistReadWritePermission(uri: Uri) {
+        try {
+            resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        } catch (_: SecurityException) { persistReadPermission(uri)
+        } catch (_: IllegalArgumentException) { persistReadPermission(uri) }
+    }
+
     fun persistReadPermission(uri: Uri) {
         try {
             resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)

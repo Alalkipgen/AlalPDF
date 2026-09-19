@@ -2,6 +2,8 @@ package com.alalkipgen.alalpdf.reader
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
@@ -88,6 +90,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -384,13 +387,21 @@ fun PdfReaderScreen(
                                 shadowElevation = 2.dp,
                             ) {
                                 if (bitmap != null) {
-                                    Image(
-                                        bitmap = bitmap.asImageBitmap(),
-                                        contentDescription = "Page " + (index + 1),
-                                        modifier = Modifier.fillMaxWidth(),
-                                        contentScale = ContentScale.FillWidth,
-                                        colorFilter = nightColorFilter,
-                                    )
+                                    BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(pageRatio)) {
+                                        Image(
+                                            bitmap = bitmap.asImageBitmap(),
+                                            contentDescription = "Page " + (index + 1),
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.FillBounds,
+                                            colorFilter = nightColorFilter,
+                                        )
+                                        state.pageLinks[index].orEmpty().forEach { link ->
+                                            Box(Modifier.offset(x = maxWidth * link.left, y = maxHeight * link.top)
+                                                .width(maxWidth * (link.right - link.left))
+                                                .height(maxHeight * (link.bottom - link.top))
+                                                .clickable(role = Role.Button, onClick = { context.openWebLink(link.url) }))
+                                        }
+                                    }
                                 } else {
                                     // The placeholder uses the real page shape, so a
                                     // finished render never changes the item height
@@ -625,6 +636,12 @@ fun PdfReaderScreen(
             }
         }
     }
+}
+
+private fun Context.openWebLink(url: String) {
+    val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return
+    if (uri.scheme != "http" && uri.scheme != "https") return
+    runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
 
 private fun Context.findActivity(): Activity? {

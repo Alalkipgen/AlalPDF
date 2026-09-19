@@ -46,6 +46,9 @@ class CreatePdfRepository(private val context: Context) {
     suspend fun save(source: File, output: Uri) = withContext(Dispatchers.IO) {
         resolver.openOutputStream(output, "w")?.use { out -> FileInputStream(source).use { it.copyTo(out) } }
             ?: error("Unable to create output file")
+        runCatching {
+            resolver.takePersistableUriPermission(output, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }
     }
     private fun plain(html: String) = HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
     private fun validate(s: PdfSpec) { when (s.mode) {
@@ -63,7 +66,7 @@ class CreatePdfRepository(private val context: Context) {
     }
     private fun addText(doc: PdfDocument, title: String, html: String, first: Int, links: MutableList<PdfLink>): Int {
         val styled = HtmlCompat.fromHtml(html.ifBlank { " " }, HtmlCompat.FROM_HTML_MODE_LEGACY)
-        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 15f; typeface = Typeface.DEFAULT }
+        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; linkColor = Color.rgb(0, 102, 204); textSize = 15f; typeface = Typeface.DEFAULT }
         val layout = StaticLayout.Builder.obtain(styled, 0, styled.length, paint, (pageWidth - margin * 2).toInt())
             .setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(false).setLineSpacing(3f, 1f).build()
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 24f; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
