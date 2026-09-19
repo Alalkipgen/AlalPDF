@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -188,11 +189,6 @@ fun LibraryScreen(
                     }
                     DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
                         DropdownMenuItem(
-                            text = { Text("Open PDF") },
-                            leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
-                            onClick = { overflowOpen = false; onOpenPdf() },
-                        )
-                        DropdownMenuItem(
                             text = { Text("Pick folder") },
                             leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
                             onClick = { overflowOpen = false; onOpenFolder() },
@@ -237,7 +233,29 @@ fun LibraryScreen(
             }
 
             if (filter == LibraryFilter.ALL && query.isBlank()) {
-                ScanHeroCard(onScanDevice)
+                // Two equally useful entry points, side by side: scanning the
+                // whole phone and opening a single file with the system picker.
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    QuickActionCard(
+                        title = "Scan this phone",
+                        subtitle = "Find every PDF",
+                        icon = Icons.Default.PhoneAndroid,
+                        container = MaterialTheme.colorScheme.primaryContainer,
+                        accent = MaterialTheme.colorScheme.primary,
+                        onClick = onScanDevice,
+                    )
+                    QuickActionCard(
+                        title = "Open PDF",
+                        subtitle = "Pick a file",
+                        icon = Icons.Default.Description,
+                        container = MaterialTheme.colorScheme.secondaryContainer,
+                        accent = MaterialTheme.colorScheme.secondary,
+                        onClick = onOpenPdf,
+                    )
+                }
             }
 
             state.statusMessage?.let {
@@ -383,30 +401,35 @@ private fun FabMenuItem(label: String, icon: ImageVector, onClick: () -> Unit) {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable private fun ScanHeroCard(onClick: () -> Unit) {
+@Composable
+private fun RowScope.QuickActionCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    container: Color,
+    accent: Color,
+    onClick: () -> Unit,
+) {
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.weight(1f),
         shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        colors = CardDefaults.cardColors(containerColor = container),
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Surface(Modifier.size(46.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
+            Surface(Modifier.size(40.dp), shape = CircleShape, color = accent) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.PhoneAndroid, null, Modifier.size(24.dp),
-                        tint = MaterialTheme.colorScheme.onPrimary)
+                    Icon(icon, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.surface)
                 }
             }
-            Column(Modifier.weight(1f)) {
-                Text("Scan this phone", style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold)
-                Text("Find every PDF on your device", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                overflow = TextOverflow.Ellipsis)
         }
     }
 }
