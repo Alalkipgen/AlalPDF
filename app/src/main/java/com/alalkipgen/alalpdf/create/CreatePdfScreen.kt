@@ -73,13 +73,23 @@ import java.io.File
 enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
 
 @Composable
-fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit) {
-    var mode by remember { mutableStateOf<CreatePdfMode?>(null) }
+fun CreatePdfScreen(
+    onBack: () -> Unit,
+    onCreated: (Uri) -> Unit,
+    initialMode: CreatePdfMode? = null,
+) {
+    var mode by remember(initialMode) { mutableStateOf(initialMode) }
     val selected = mode
     if (selected == null) {
         ModePicker(onBack = onBack, onPick = { mode = it })
     } else {
-        CreateFlow(mode = selected, onBack = { mode = null }, onCreated = onCreated)
+        CreateFlow(
+            mode = selected,
+            // When the flow was opened straight from the home FAB menu there is
+            // no picker behind it, so back goes home instead.
+            onBack = { if (initialMode != null) onBack() else mode = null },
+            onCreated = onCreated,
+        )
     }
 }
 
