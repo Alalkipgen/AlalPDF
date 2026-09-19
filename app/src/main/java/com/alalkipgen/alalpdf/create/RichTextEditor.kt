@@ -65,7 +65,7 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
     val color = MaterialTheme.colorScheme.onSurface.toArgb(); val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
     AndroidView(modifier = modifier, factory = {
         EditText(context).apply {
-            setBackgroundColor(Color.TRANSPARENT); setTextColor(color); setHintTextColor(hintColor); textSize = 17f; gravity = android.view.Gravity.TOP; hint = "Start writing…"; setPadding(16, 12, 16, 16)
+            setBackgroundColor(Color.TRANSPARENT); setTextColor(color); setHintTextColor(hintColor); textSize = 17f; gravity = android.view.Gravity.TOP; hint = "Start writing…"; setPadding(16, 12, 16, 16); isVerticalScrollBarEnabled = true; setHorizontallyScrolling(false); inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE; overScrollMode = android.view.View.OVER_SCROLL_IF_CONTENT_SCROLLS
             setText(HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY)); setSelection(text.length)
             fun emit() = latestChange(controller.html())
             controller.attach(this, ::emit)
@@ -73,7 +73,15 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
             fun at(e: MotionEvent): EditorLink? { val l = layout ?: return null; val line = l.getLineForVertical((e.y + scrollY - totalPaddingTop).toInt().coerceAtLeast(0)); val o = l.getOffsetForHorizontal(line, e.x + scrollX - totalPaddingLeft); val s = editableText.getSpans(o, (o + 1).coerceAtMost(editableText.length), URLSpan::class.java).firstOrNull() ?: return null; val a = editableText.getSpanStart(s); val b = editableText.getSpanEnd(s); return EditorLink(editableText.subSequence(a, b).toString(), s.url, a, b) }
             var pressed: EditorLink? = null
             val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() { override fun onDown(e: MotionEvent) = true; override fun onSingleTapConfirmed(e: MotionEvent): Boolean { pressed?.let { runCatching { uri.openUri(normalizeHttpUrl(it.url)) }; return true }; return false }; override fun onLongPress(e: MotionEvent) { pressed?.let { setSelection(it.start, it.end); latestLong(it) } } })
-            setOnTouchListener { _, event -> if (event.actionMasked == MotionEvent.ACTION_DOWN) pressed = at(event); val intercept = pressed != null; if (intercept) detector.onTouchEvent(event); if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) postDelayed({ pressed = null }, 350); intercept }
+            setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) { pressed = at(event); parent?.requestDisallowInterceptTouchEvent(true) }
+                val linkGesture = pressed != null
+                if (linkGesture) detector.onTouchEvent(event)
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    parent?.requestDisallowInterceptTouchEvent(false); postDelayed({ pressed = null }, 350)
+                }
+                linkGesture
+            }
         }
     }, update = { v -> controller.attach(v) { latestChange(controller.html()) }; v.setTextColor(color); v.setHintTextColor(hintColor) })
 }
