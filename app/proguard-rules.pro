@@ -9,3 +9,7 @@
 -keep class androidx.compose.** { *; }
 -keep class kotlinx.coroutines.** { *; }
 -dontwarn kotlinx.coroutines.**
+
+# Optional JPEG 2000 codec is not needed for text/link generation.
+-dontwarn com.gemalto.jp2.JP2Decoder
+-dontwarn com.gemalto.jp2.JP2Encoder
