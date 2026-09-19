@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -139,14 +140,9 @@ fun PdfReaderScreen(
     var autoScroll by remember { mutableStateOf(false) }
     var autoSpeed by remember { mutableFloatStateOf(2.5f) }
 
-    // Zoom is applied to the *content width* instead of a graphics layer. The
-    // list therefore keeps its own native vertical fling and a plain horizontal
-    // scroll container handles panning, which removes the stutter and the old
-    // "only one or two pages can be reached while zoomed" limitation.
+    // Zoom is applied to the *content width* instead of a graphics layer.
     var scale by remember { mutableFloatStateOf(1f) }
 
-    // derivedStateOf keeps the top bar and pill from recomposing on every pixel
-    // of scroll, which makes long documents noticeably smoother.
     val visiblePage by remember { derivedStateOf { listState.firstVisibleItemIndex } }
     val lastIndex = (state.pageCount - 1).coerceAtLeast(0)
 
@@ -375,8 +371,6 @@ fun PdfReaderScreen(
             }
         },
         bottomBar = {
-            // The permanent page slider is gone. Only the auto-scroll speed
-            // control appears, and only while auto-scroll is running.
             if (!fullScreen && autoScroll) {
                 Surface(tonalElevation = 3.dp) {
                     Row(
@@ -421,9 +415,6 @@ fun PdfReaderScreen(
                                 awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                 do {
                                     val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    // Only two-finger gestures are intercepted; single
-                                    // finger drags stay with the list so scrolling and
-                                    // flinging keep their native feel.
                                     if (event.changes.size >= 2) {
                                         val zoom = event.calculateZoom()
                                         if (zoom != 1f) {
@@ -433,7 +424,6 @@ fun PdfReaderScreen(
                                             val centroid = event.calculateCentroid(useCurrent = true)
                                             scale = next
                                             if (ratio != 1f && centroid != Offset.Unspecified) {
-                                                // Keep the point between the fingers pinned.
                                                 horizontalScroll.dispatchRawDelta(
                                                     (horizontalScroll.value + centroid.x) * (ratio - 1f)
                                                 )
@@ -449,6 +439,9 @@ fun PdfReaderScreen(
                         }
                         .pointerInput(Unit) {
                             detectTapGestures(
+                                // A single tap hides the top bar for a full screen
+                                // read; the next tap brings it back.
+                                onTap = { fullScreen = !fullScreen },
                                 onDoubleTap = { tap ->
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     val previous = scale
@@ -461,11 +454,12 @@ fun PdfReaderScreen(
                                     listState.dispatchRawDelta(
                                         (listState.firstVisibleItemScrollOffset + tap.y) * (ratio - 1f)
                                     )
-                                }
+                                },
                             )
                         }
                 ) {
                     val pageWidth = maxWidth * scale
+                    val pageRatio = (1f / state.aspectRatio.coerceAtLeast(0.2f))
                     LazyColumn(
                         state = listState,
                         modifier = Modifier
@@ -477,17 +471,15 @@ fun PdfReaderScreen(
                     ) {
                         items(state.pageCount, key = { index -> index }) { index ->
                             val bitmap = state.pages[index]
-                            // Retry while the page is still missing. A single
-                            // dropped render request used to leave one page
-                            // spinning forever.
-                            LaunchedEffect(index, nightMode, bitmap == null) {
-                                if (bitmap == null) {
-                                    var attempts = 0
-                                    while (attempts < 30) {
-                                        onRender(index)
-                                        attempts++
-                                        delay(700)
-                                    }
+                            // One request per page, with a few slow retries only if
+                            // the render was dropped. The old 700 ms loop flooded the
+                            // renderer and was the main source of stutter.
+                            LaunchedEffect(index, nightMode) {
+                                var attempts = 0
+                                while (state.pages[index] == null && attempts < 6) {
+                                    onRender(index)
+                                    attempts++
+                                    delay(1500)
                                 }
                             }
                             Surface(
@@ -503,10 +495,11 @@ fun PdfReaderScreen(
                                         contentScale = ContentScale.FillWidth,
                                     )
                                 } else {
-                                    // A plain page-shaped placeholder is far less
-                                    // distracting than a spinner while rendering.
+                                    // The placeholder uses the real page shape, so a
+                                    // finished render never changes the item height
+                                    // and the list never jumps or flashes.
                                     Box(
-                                        Modifier.fillMaxWidth().height(560.dp * scale),
+                                        Modifier.fillMaxWidth().aspectRatio(pageRatio),
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         Text(
@@ -529,9 +522,6 @@ fun PdfReaderScreen(
                 BackHandler(enabled = !fullScreen) { scale = 1f }
             }
 
-            // Google Drive style scrollbar: it slides along the right edge while
-            // the document moves, can be dragged to jump through the file, and
-            // disappears on its own once scrolling stops.
             if (state.pageCount > 1) {
                 val thumbHeight = 56.dp
                 val trackHeight = (viewportHeight - thumbHeight).coerceAtLeast(0.dp)
