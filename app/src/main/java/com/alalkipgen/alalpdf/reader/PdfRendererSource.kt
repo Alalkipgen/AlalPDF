@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.os.Build
+import androidx.annotation.RequiresApi
 import java.io.Closeable
 
 class PdfRendererSource private constructor(
@@ -30,6 +32,21 @@ class PdfRendererSource private constructor(
                 bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
             }
             return bitmap
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    fun textRuns(pageIndex: Int): List<PdfTextRun> {
+        require(pageIndex in 0 until renderer.pageCount)
+        renderer.openPage(pageIndex).use { page ->
+            val width = page.width.toFloat().coerceAtLeast(1f)
+            val height = page.height.toFloat().coerceAtLeast(1f)
+            return page.textContents.mapNotNull { content ->
+                if (content.text.isBlank() || content.bounds.isEmpty()) return@mapNotNull null
+                val bounds = android.graphics.RectF(content.bounds.first())
+                content.bounds.drop(1).forEach { bounds.union(it) }
+                PdfTextRun(pageIndex, content.text, bounds.left / width, bounds.top / height, bounds.right / width, bounds.bottom / height)
+            }
         }
     }
 

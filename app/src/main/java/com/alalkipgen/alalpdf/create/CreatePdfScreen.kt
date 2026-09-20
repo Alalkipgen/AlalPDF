@@ -77,7 +77,7 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
     fun scanUri():Uri{val f=File(File(context.cacheDir,"create-scans").apply{mkdirs()},"scan-${System.nanoTime()}.jpg");pendingScan=f.path;return FileProvider.getUriForFile(context,"${context.packageName}.fileprovider",f)}
     val camera=rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()){ok->pendingScan?.let{path->if(ok){scanPaths=ArrayList(scanPaths+path);build()}else File(path).delete()};pendingScan=null}
 
-    val output = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri -> val source = previewPath?.let(::File); if (uri != null && source != null) { busy = true; scope.launch { runCatching { repository.save(source, uri) }.onSuccess { busy = false; onCreated(uri) }.onFailure { busy = false; message = it.message } } } }
+    val output = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri -> val source = previewPath?.let(::File); if (uri != null && source != null) { busy = true; scope.launch { runCatching { repository.save(source, uri) }.onSuccess { busy=false;source.delete();scanPaths.forEach{File(it).delete()};title="";html="";imageStrings=arrayListOf();scanPaths=arrayListOf();previewPath=null;editor.clear();onCreated(uri) }.onFailure { busy = false; message = it.message } } } }
     LaunchedEffect(mode) { if (mode == CreatePdfMode.IMAGES && imageStrings.isEmpty()) images.launch(arrayOf("image/*")); if (mode == CreatePdfMode.SCAN && scanPaths.isEmpty()) camera.launch(scanUri()) }
 
     val preview = previewPath?.let(::File)?.takeIf(File::exists)
@@ -105,16 +105,14 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
         },
     ) { padding ->
         if (textMode) {
-            Column(Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(title, { title = it; previewPath = null }, label = { Text("Document title") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp))
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilledTonalButton(onClick = { if (!editor.toggleBold()) message = "Select text first" }) { Text("B", fontWeight = FontWeight.Bold) }
-                    FilledTonalButton(onClick = { if (!editor.toggleItalic()) message = "Select text first" }) { Text("I", fontStyle = FontStyle.Italic) }
-                    FilledTonalButton(onClick = { editor.selectionLink()?.let(::linkDialog) ?: run { message = "Select text first" } }) { Icon(Icons.Default.Link, null); Text(" Link") }
-                }
+            Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
                 Box(Modifier.fillMaxWidth().weight(1f).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 10.dp, vertical = 8.dp), contentAlignment = Alignment.TopCenter) {
                     Surface(Modifier.fillMaxHeight().fillMaxWidth().widthIn(max = 840.dp), shape = RoundedCornerShape(8.dp), shadowElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
-                        RichTextEditor(html, { html = it; previewPath = null }, editor, Modifier.fillMaxSize(), ::linkDialog)
+                        Column(Modifier.fillMaxSize()) {
+                            androidx.compose.foundation.text.BasicTextField(value=title,onValueChange={title=it.replace("\n","").take(120);previewPath=null},singleLine=true,textStyle=MaterialTheme.typography.headlineSmall.copy(color=MaterialTheme.colorScheme.onSurface),decorationBox={field->Box(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=16.dp)){if(title.isBlank())Text("Title",style=MaterialTheme.typography.headlineSmall,color=MaterialTheme.colorScheme.onSurfaceVariant);field()}},modifier=Modifier.fillMaxWidth())
+                            HorizontalDivider(Modifier.padding(horizontal=20.dp))
+                            RichTextEditor(html,{html=it;previewPath=null},editor,Modifier.fillMaxSize(),::linkDialog)
+                        }
                     }
                 }
                 if (mode == CreatePdfMode.IMAGE_TEXT) {
@@ -122,7 +120,7 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                     TextButton(onClick = { images.launch(arrayOf("image/*")) }, modifier = Modifier.padding(horizontal = 12.dp)) { Icon(Icons.Default.AddPhotoAlternate, null); Text(" Add images") }
                 }
                 message?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp)) }
-                Text("Swipe to scroll quickly. Tap a link to open; press and hold to edit.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                Surface(tonalElevation=4.dp){Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal=8.dp,vertical=4.dp),horizontalArrangement=Arrangement.SpaceEvenly){IconButton(onClick={if(!editor.toggleBold())message="Select text first"}){Text("B",fontWeight=FontWeight.Bold)};IconButton(onClick={if(!editor.toggleItalic())message="Select text first"}){Text("I",fontStyle=FontStyle.Italic)};IconButton(onClick={editor.selectionLink()?.let(::linkDialog)?:run{message="Select text first"}}){Icon(Icons.Default.Link,"Link")};IconButton(onClick=editor::undo){Icon(Icons.Default.Undo,"Undo")};IconButton(onClick=editor::redo){Icon(Icons.Default.Redo,"Redo")}}}
             }
         } else {
             Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {

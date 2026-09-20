@@ -33,6 +33,9 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
     private var changed: (() -> Unit)? = null
     internal fun attach(v: EditText, callback: () -> Unit) { view = v; changed = callback }
     internal fun html() = view?.editableText?.let { HtmlCompat.toHtml(it, HtmlCompat.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE) }.orEmpty()
+    fun undo() { view?.onTextContextMenuItem(android.R.id.undo) }
+    fun redo() { view?.onTextContextMenuItem(android.R.id.redo) }
+    fun clear() { view?.text?.clear(); changed?.invoke() }
     fun toggleBold() = toggle(Typeface.BOLD)
     fun toggleItalic() = toggle(Typeface.ITALIC)
     private fun toggle(style: Int): Boolean {
@@ -118,6 +121,11 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
             editor.setTextColor(color)
             editor.setHintTextColor(hintColor)
             editor.typeface=pyidaungsu
+            val incoming = HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+            if (editor.text.toString() != incoming && !editor.hasFocus()) {
+                editor.setText(HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY))
+                editor.setSelection(editor.text.length)
+            }
         },
     )
 }
