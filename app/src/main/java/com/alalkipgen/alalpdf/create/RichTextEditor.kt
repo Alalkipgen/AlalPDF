@@ -16,10 +16,12 @@ import android.widget.EditText
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
 import androidx.core.text.HtmlCompat
 import androidx.core.view.ViewCompat
 import androidx.core.widget.NestedScrollView
@@ -79,8 +81,10 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
     val pyidaungsu=remember(context){PyidaungsuFonts.regular(context)}
+    // The editor lives in a NestedScrollView, so this interop connection is what
+    // lets its scrolling drive the collapsing top app bar above it.
     AndroidView(
-        modifier = modifier,
+        modifier = modifier.nestedScroll(rememberNestedScrollInteropConnection()),
         factory = {
             val editor = EditText(context).apply {
                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
