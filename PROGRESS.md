@@ -16,6 +16,8 @@ cat PROGRESS.md      # <- you are here; find the first unchecked box and continu
 - Base SHA: `178b5205d8accc86dd78596d1dfa8676f24f7db1`
 - Rule: **never force-push, never rewrite history, never commit directly to `main`.**
 - Rule: **commit + push after every phase** (and after every risky single file edit).
+- Rule: **push every interdependent file in the same commit** so the branch
+  always compiles on its own.
 
 ---
 
@@ -24,10 +26,10 @@ cat PROGRESS.md      # <- you are here; find the first unchecked box and continu
 | Phase | Title | Status |
 |-------|-------|--------|
 | Setup | Branch + PROGRESS.md | ✅ DONE |
-| 0 | Surface hidden text-extraction errors | ⬜ TODO |
-| 1 | Rebuild text pipeline (lazy extract, Myanmar normalize, real search) | ⬜ TODO |
-| 2 | Render performance + thumbnail pipeline | ⬜ TODO |
-| 3 | pdfium engine + Drive-style text selection | ⬜ TODO |
+| 0 | Surface hidden text-extraction errors | ✅ DONE |
+| 1 | Rebuild text pipeline (lazy extract, Myanmar normalize, real search) | ✅ DONE |
+| 2 | Render performance + thumbnail pipeline | ✅ DONE |
+| 3 | pdfium engine + Drive-style text selection | ⬜ TODO ← **resume here** |
 | 4 | Create PDF: long title wrapping | ⬜ TODO |
 | 5 | WYSIWYG Edit PDF overlay editor | ⬜ TODO |
 | PR | Open pull request into `main` | ⬜ TODO |
@@ -102,32 +104,35 @@ Additional guardrails:
 
 ## Phase detail
 
-### Phase 0 — Surface hidden errors
-- [ ] `PdfReaderUiState`: add `textState` (Loading / Ready / ImageOnly / Failed)
-- [ ] `PdfReaderViewModel.load()`: add `.onFailure { }` to the text branch
-- [ ] `PdfReaderScreen`: replace the blanket "No selectable text" string with a
-      distinct message per state
+### Phase 0 — Surface hidden errors ✅
+- [x] `PdfReaderUiState`: `textState` (Loading / Ready / ImageOnly / Failed)
+- [x] `PdfReaderViewModel`: real `.onFailure` on the text branch + `textError`
+- [x] `PdfReaderScreen`: four distinct messages instead of "No selectable text"
+      (done with Phase 1)
 
-### Phase 1 — Text pipeline
-- [ ] `PdfReaderRepository`: replace `text(uri)` with lazy `pageText(uri, page)`
-- [ ] `PdfTextExtractor`: hold one open `PDDocument`, add an `LruCache`, and run
-      on a dedicated single-thread dispatcher
-- [ ] Move text extraction off the render lock
-- [ ] New `MyanmarText.kt`: NFC normalize + Zawgyi detection/conversion +
-      zero-width character stripping
-- [ ] `search()`: find **all** matches per page, normalized, with progress
-- [ ] Search UI: bottom sheet, result list, jump-to-match, highlight
+### Phase 1 — Text pipeline ✅
+- [x] `PdfReaderRepository`: `text(uri)` replaced by `pageText(uri, page)` and
+      `pageTextRuns(uri, page)`
+- [x] `PdfTextIndex`: one spooled `PDDocument`, `MemoryUsageSetting.setupMixed`,
+      48-page `LruCache`, one page stripped at a time
+- [x] Text extraction moved off the render lock onto its own `textLock`
+- [x] New `MyanmarText.kt`: NFC normalize, zero-width strip, Zawgyi detection,
+      best-effort Zawgyi → Unicode, `searchKey()`
+- [x] `search()`: every match per page, normalized, incremental with progress
+- [x] Search UI: query field, live progress, result list, jump to page
 
-### Phase 2 — Render performance
-- [ ] `DISPLAY_DISTANCE` 1 → 3
-- [ ] Two-pass render: RGB_565 @ ~320 px first, then full-width ARGB_8888
-- [ ] Delete the dead per-pixel night-invert loop
-- [ ] Bitmap pool via `inBitmap`
-- [ ] Remove the `delay(2000)` retry loop from the item composable
-- [ ] New `ThumbnailCache.kt`: 120 px RGB_565 + disk cache
-- [ ] Thumbnail grid reads the thumbnail cache instead of `state.pages`
+### Phase 2 — Render performance ✅
+- [x] `DISPLAY_DISTANCE` 1 → 3 (full-width only within ±1: `FULL_QUALITY_DISTANCE`)
+- [x] Two-pass render: 360 px pass first, then full width
+- [x] Deleted the dead per-pixel night-invert loop
+- [x] Removed the `delay(2000)` retry from the item composable
+- [x] New `ThumbnailCache.kt`: 160 px RGB_565 + WebP disk cache
+- [x] Thumbnail grid reads `state.thumbnails`
+- [ ] ~~`inBitmap` pool~~ — intentionally skipped. Compose can still be drawing
+      an evicted bitmap, so reusing its memory risks visible corruption. The
+      two-pass render already removed most of the allocation pressure.
 
-### Phase 3 — pdfium + selection
+### Phase 3 — pdfium + selection ⬅ NEXT
 - [ ] Add the pdfium dependency
 - [ ] Extract a `PdfRendererSource` interface; add a pdfium implementation
 - [ ] Character-box API wrapper (`GetCharBox`, `GetCharIndexAtPos`, `FindNext`)
@@ -153,4 +158,9 @@ Additional guardrails:
 
 | Date | Commit | Note |
 |------|--------|------|
-| 2026-09-20 | _(this commit)_ | Branch created, progress tracker added |
+| 2026-09-20 | `60b0bb3` | Branch created, progress tracker added |
+| 2026-09-20 | `97dc2ee` | Phase 0 — text load state + real failure handling |
+| 2026-09-20 | `6315782` | Phase 1a — `MyanmarText`, `PdfTextIndex`, lazy repository, new view model |
+| 2026-09-20 | `c723f6d` | Phase 1b — reader UI wired to the lazy pipeline (branch compiles again) |
+| 2026-09-20 | `f5ae18e` | Phase 2a — two-pass render, thumbnail cache, dead night-invert removed |
+| 2026-09-20 | _(this commit)_ | Phase 2b — grid uses thumbnails, retry loop removed |

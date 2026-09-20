@@ -259,7 +259,13 @@ fun PdfReaderScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(state.pageCount) { index ->
-                        val bitmap = state.pages[index]
+                        // Thumbnails come from their own persistent cache. The
+                        // live render map only ever holds the pages near the
+                        // current one, which is why the grid used to be empty.
+                        val bitmap = state.thumbnails[index] ?: state.pages[index]
+                        LaunchedEffect(index, bitmap == null) {
+                            if (bitmap == null) onRender(index)
+                        }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Surface(
                                 Modifier
@@ -396,16 +402,13 @@ fun PdfReaderScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(state.pageCount, key = { index -> index }) { index ->
-                            val bitmap = state.pages[index]
+                            val bitmap = state.pages[index] ?: state.thumbnails[index]
                             val pageRatio = 1f / (state.pageAspectRatios[index]
                                 ?: state.defaultAspectRatio).coerceAtLeast(0.2f)
-                            LaunchedEffect(index, bitmap == null) {
-                                if (bitmap == null) {
-                                    onRender(index)
-                                    delay(2000)
-                                    if (state.pages[index] == null) onRender(index)
-                                }
-                            }
+                            // The render queue already re-prioritises work, so a
+                            // single request per page is enough; the old
+                            // delay(2000) retry only caused duplicate renders.
+                            LaunchedEffect(index) { onRender(index) }
                             Surface(
                                 Modifier.fillMaxWidth(),
                                 tonalElevation = 2.dp,
