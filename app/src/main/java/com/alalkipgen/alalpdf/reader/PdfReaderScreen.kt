@@ -120,6 +120,8 @@ fun PdfReaderScreen(
     onAddBookmark: () -> Unit,
     onPageSelected: (Int) -> Unit,
     onRender: (Int) -> Unit,
+    onPasswordSubmit: (String) -> Unit = {},
+    onEditPdf: () -> Unit = {},
 ) {
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage.coerceAtLeast(0))
     val horizontalScroll = rememberScrollState()
@@ -135,6 +137,10 @@ fun PdfReaderScreen(
     var jumpText by remember { mutableStateOf("") }
     var requestedPage by remember { mutableStateOf<Int?>(null) }
     var textOpen by remember{mutableStateOf(false)}
+    var searchOpen by remember{mutableStateOf(false)}
+    var searchQuery by remember{mutableStateOf("")}
+    var passwordText by remember{mutableStateOf("")}
+    val searchResults=remember(state.pageTexts,searchQuery){PdfTextExtractor.search(state.pageTexts,searchQuery)}
 
     // The scrollbar and the page pill only appear while the document is moving
     // and fade away again about two seconds after scrolling stops.
@@ -481,6 +487,7 @@ fun PdfReaderScreen(
                                     Icon(Icons.Default.MoreVert, contentDescription = "More")
                                 }
                                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenuItem(text={Text("Search document")},onClick={menuOpen=false;searchOpen=true})
                                     DropdownMenuItem(text={Text("Select & copy page text")},onClick={menuOpen=false;textOpen=true})
                                     DropdownMenuItem(
                                         text = { Text("Go to page") },
@@ -503,6 +510,7 @@ fun PdfReaderScreen(
                                         },
                                     )
                                     HorizontalDivider()
+                                    DropdownMenuItem(text={Text("Edit PDF")},onClick={menuOpen=false;onEditPdf()})
                                     DropdownMenuItem(
                                         text = { Text("Print") },
                                         onClick = { menuOpen = false; onPrint() },
@@ -619,6 +627,8 @@ fun PdfReaderScreen(
                 }
             }
 
+            if(state.requiresPassword){AlertDialog(onDismissRequest=onBack,title={Text("Password protected PDF")},text={OutlinedTextField(passwordText,{passwordText=it},label={Text("Password")},singleLine=true)},confirmButton={TextButton(onClick={onPasswordSubmit(passwordText)},enabled=passwordText.isNotBlank()){Text("Open")}},dismissButton={TextButton(onClick=onBack){Text("Cancel")}})}
+            if(searchOpen){AlertDialog(onDismissRequest={searchOpen=false},title={Text("Search document")},text={Column{OutlinedTextField(searchQuery,{searchQuery=it},label={Text("Search")});Text("${searchResults.size} page(s)");LazyColumn(Modifier.height(280.dp)){items(searchResults.size){i->val r=searchResults[i];TextButton(onClick={requestedPage=r.page;searchOpen=false},modifier=Modifier.fillMaxWidth()){Column{Text("Page ${r.page+1}");Text(r.excerpt,maxLines=3,overflow=TextOverflow.Ellipsis)}}}}}},confirmButton={TextButton(onClick={searchOpen=false}){Text("Close")}})}
             if(textOpen){val t=state.pageTexts.firstOrNull{it.page==visiblePage}?.text.orEmpty();AlertDialog(onDismissRequest={textOpen=false},title={Text("Page text")},text={SelectionContainer{Text(t.ifBlank{"No selectable text"},Modifier.height(360.dp).verticalScroll(rememberScrollState()))}},confirmButton={TextButton(onClick={context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("PDF",t));textOpen=false}){Text("Copy all")}})}
             if (jumpOpen) {
                 AlertDialog(

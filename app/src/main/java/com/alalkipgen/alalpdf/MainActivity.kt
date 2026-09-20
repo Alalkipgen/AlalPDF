@@ -33,6 +33,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.alalkipgen.alalpdf.create.CreatePdfMode
 import com.alalkipgen.alalpdf.create.CreatePdfScreen
+import com.alalkipgen.alalpdf.create.CreatePdfRepository
+import com.alalkipgen.alalpdf.create.PdfDraft
+import com.alalkipgen.alalpdf.tools.PdfToolsScreen
 import com.alalkipgen.alalpdf.data.AlalPdfDatabase
 import com.alalkipgen.alalpdf.data.AlalPdfRepository
 import com.alalkipgen.alalpdf.library.DeviceScanRepository
@@ -91,6 +94,7 @@ private const val SCREEN_LIBRARY = "library"
 private const val SCREEN_FOLDER = "folder"
 private const val SCREEN_READER = "reader"
 private const val SCREEN_CREATE = "create"
+private const val SCREEN_TOOLS = "tools"
 
 @Composable
 private fun AppRoot(
@@ -101,6 +105,7 @@ private fun AppRoot(
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
+    val appScope = rememberCoroutineScope()
     val libraryRepository = remember(appContext) { PdfLibraryRepository(appContext) }
     val deviceScan = remember(appContext) { DeviceScanRepository(appContext) }
     val prefs = remember(appContext) { LibraryPrefs(appContext) }
@@ -116,6 +121,10 @@ private fun AppRoot(
     var selectedUri by rememberSaveable { mutableStateOf<String?>(null) }
     var folderUri by rememberSaveable { mutableStateOf<String?>(null) }
     var createMode by rememberSaveable { mutableStateOf<String?>(null) }
+    var draftMode by rememberSaveable { mutableStateOf<String?>(null) }
+    var draftTitle by rememberSaveable { mutableStateOf("") }
+    var draftHtml by rememberSaveable { mutableStateOf("") }
+    var draftImages by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
 
     LaunchedEffect(Unit) { viewModel.loadRecent() }
     LaunchedEffect(incomingPdf) {
@@ -180,6 +189,7 @@ private fun AppRoot(
                     screen = SCREEN_READER
                 },
                 initialMode = createMode?.let { runCatching { CreatePdfMode.valueOf(it) }.getOrNull() },
+                initialDraft = draftMode?.let { PdfDraft(CreatePdfMode.valueOf(it),draftTitle,draftHtml,draftImages) },
             )
         }
         SCREEN_FOLDER -> {
@@ -195,6 +205,7 @@ private fun AppRoot(
                 },
             )
         }
+        SCREEN_TOOLS -> { val current=selectedUri;if(current==null)screen=SCREEN_LIBRARY else PdfToolsScreen(Uri.parse(current),{screen=SCREEN_READER}){saved->viewModel.openDocument(saved);selectedUri=saved.toString();screen=SCREEN_READER} }
         SCREEN_READER -> {
             val current = selectedUri
             if (current == null) screen = SCREEN_LIBRARY else ReaderRoute(
@@ -203,6 +214,7 @@ private fun AppRoot(
                 dataRepository = dataRepository,
                 prefs = prefs,
                 onBack = { screen = SCREEN_LIBRARY; selectedUri = null },
+                onEdit = { appScope.launch { val d=runCatching{CreatePdfRepository(appContext).readDraft(Uri.parse(current))}.getOrNull();if(d!=null){draftMode=d.mode.name;draftTitle=d.title;draftHtml=d.bodyHtml;draftImages=ArrayList(d.images);createMode=d.mode.name;screen=SCREEN_CREATE}else screen=SCREEN_TOOLS } },
             )
         }
         else -> LibraryScreen(
@@ -236,6 +248,7 @@ private fun ReaderRoute(
     dataRepository: AlalPdfRepository,
     prefs: LibraryPrefs,
     onBack: () -> Unit,
+    onEdit: () -> Unit,
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
@@ -265,6 +278,7 @@ private fun ReaderRoute(
     var positionLoaded by rememberSaveable(uri.toString()) { mutableStateOf(false) }
     var pendingPage by rememberSaveable(uri.toString()) { mutableStateOf<Int?>(null) }
     var showBookmarks by rememberSaveable(uri.toString()) { mutableStateOf(false) }
+    var password by rememberSaveable(uri.toString()) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(uri) {
         runCatching { libraryRepository.inspect(uri).name }.getOrNull()?.let { title = it }
@@ -276,7 +290,7 @@ private fun ReaderRoute(
         }
     }
     LaunchedEffect(uri, width, positionLoaded) {
-        if (positionLoaded) readerViewModel.load(uri, width, currentPage, nightMode)
+        if (positionLoaded) readerViewModel.load(uri, width, currentPage, nightMode,password)
     }
     LaunchedEffect(readerState.pageCount) {
         if (readerState.pageCount > 0) prefs.setPageCount(uri.toString(), readerState.pageCount)
@@ -310,6 +324,8 @@ private fun ReaderRoute(
             readerViewModel.renderWindow(uri, page, width, nightMode)
         },
         onRender = { page -> readerViewModel.requestPage(uri, page, width) },
+        onPasswordSubmit = { value -> password=value;readerViewModel.load(uri,width,currentPage,nightMode,value) },
+        onEditPdf = onEdit,
     )
     if (showBookmarks) {
         BackHandler { showBookmarks = false }

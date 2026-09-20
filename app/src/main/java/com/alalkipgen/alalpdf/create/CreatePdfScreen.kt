@@ -37,11 +37,11 @@ import java.io.File
 
 enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
 
-@Composable fun CreatePdfScreen(onBack: () -> Unit, onCreated: (Uri) -> Unit, initialMode: CreatePdfMode? = null) {
-    var modeName by rememberSaveable { mutableStateOf(initialMode?.name) }
+@Composable fun CreatePdfScreen(onBack: () -> Unit,onCreated:(Uri)->Unit,initialMode:CreatePdfMode?=null,initialDraft:PdfDraft?=null){
+    var modeName by rememberSaveable { mutableStateOf((initialDraft?.mode?:initialMode)?.name) }
     val mode = modeName?.let(CreatePdfMode::valueOf)
     if (mode == null) ModePicker(onBack) { modeName = it.name }
-    else CreateFlow(mode, initialMode != null, { modeName = null }, onBack, onCreated)
+    else CreateFlow(mode,initialMode!=null||initialDraft!=null,{modeName=null},onBack,onCreated,initialDraft)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -58,10 +58,10 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable private fun CreateFlow(mode: CreatePdfMode, direct: Boolean, picker: () -> Unit, onBack: () -> Unit, onCreated: (Uri) -> Unit) {
+@Composable private fun CreateFlow(mode:CreatePdfMode,direct:Boolean,picker:()->Unit,onBack:()->Unit,onCreated:(Uri)->Unit,draft:PdfDraft?=null){
     val context = LocalContext.current; val scope = rememberCoroutineScope(); val repository = remember(context) { CreatePdfRepository(context) }
-    var title by rememberSaveable { mutableStateOf("") }; var html by rememberSaveable { mutableStateOf("") }
-    var imageStrings by rememberSaveable { mutableStateOf(arrayListOf<String>()) }; var scanPaths by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var title by rememberSaveable { mutableStateOf(draft?.title.orEmpty()) }; var html by rememberSaveable { mutableStateOf(draft?.bodyHtml.orEmpty()) }
+    var imageStrings by rememberSaveable { mutableStateOf(ArrayList(draft?.images.orEmpty())) }; var scanPaths by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var pendingScan by rememberSaveable{mutableStateOf<String?>(null)}; var previewPath by rememberSaveable { mutableStateOf<String?>(null) }; var busy by rememberSaveable { mutableStateOf(false) }; var message by rememberSaveable { mutableStateOf<String?>(null) }
     val editor = rememberRichTextController(); var editingLink by remember { mutableStateOf<EditorLink?>(null) }; var linkText by remember { mutableStateOf("") }; var linkUrl by remember { mutableStateOf("") }
     fun back() { if (direct) onBack() else picker() }
