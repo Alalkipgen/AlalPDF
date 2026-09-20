@@ -12,6 +12,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,17 +29,16 @@ import kotlin.math.abs
  * Lifecycle of the document's text layer.
  *
  * Previously every failure collapsed into "pageTexts is empty", which the UI
- * reported as "No selectable text" regardless of the real cause. Keeping the
- * cause makes both the copy dialog and the search dialog honest.
+ * reported as "No selectable text" regardless of the real cause.
  */
 enum class PdfTextLoadState {
-    /** Extraction has not finished yet. */
+    /** Nothing has been extracted yet. */
     Loading,
 
     /** At least one page produced text. */
     Ready,
 
-    /** Extraction succeeded but the document has no embedded text (scanned images). */
+    /** Extraction succeeded but the page has no embedded text (scanned image). */
     ImageOnly,
 
     /** Extraction threw. See [PdfReaderUiState.textError]. */
@@ -52,10 +52,16 @@ data class PdfReaderUiState(
     val pageAspectRatios: SnapshotStateMap<Int, Float> = mutableStateMapOf(),
     val defaultAspectRatio: Float = 1.414f,
     val pageLinks: Map<Int, List<PdfPageLink>> = emptyMap(),
-    val pageTexts: List<PdfPageText> = emptyList(),
-    val textRuns: List<PdfTextRun> = emptyList(),
+    /** Lazily filled, keyed by zero-based page index. */
+    val pageTexts: Map<Int, String> = emptyMap(),
+    /** Positioned runs per page; only available on API 35+. */
+    val textRuns: Map<Int, List<PdfTextRun>> = emptyMap(),
     val textState: PdfTextLoadState = PdfTextLoadState.Loading,
     val textError: String? = null,
+    val searchQuery: String = "",
+    val searchResults: List<PdfSearchResult> = emptyList(),
+    val searchProgress: Float = 0f,
+    val searchRunning: Boolean = false,
     val requiresPassword:Boolean=false,
     val errorMessage: String? = null,
 )
@@ -85,6 +91,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     private val queuedPages = mutableSetOf<Pair<Int, Int>>()
     private val wakeUp = Channel<Unit>(Channel.CONFLATED)
     private val sequence = AtomicLong(0)
+    private val textRequests = ConcurrentHashMap<Int, Boolean>()
+    private var searchJob: Job? = null
 
     @Volatile private var generation = 0
     @Volatile private var loadedUri: String? = null
@@ -116,6 +124,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         loadedUri = key
         focusedPage = initialPage.coerceAtLeast(0)
         synchronized(queueLock) { queue.clear(); queuedPages.clear() }
+        searchJob?.cancel()
+        textRequests.clear()
         cache.clear()
         renderedWidths.clear()
         Snapshot.withMutableSnapshot { pages.clear(); pageAspectRatios.clear() }
@@ -131,13 +141,15 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                     pageCount = count,
                     errorMessage = null,
                 ) }
-                if (count > 0) requestWindow(
-                    uri,
-                    initialPage.coerceIn(0, count - 1),
-                    width,
-                    currentGeneration,
-                )
-                loadText(uri, currentGeneration)
+                if (count > 0) {
+                    requestWindow(
+                        uri,
+                        initialPage.coerceIn(0, count - 1),
+                        width,
+                        currentGeneration,
+                    )
+                    requestPageText(uri, initialPage.coerceIn(0, count - 1))
+                }
                 runCatching { repository.links(uri) }.onSuccess { links ->
                     if (currentGeneration == generation) _uiState.update { state -> state.copy(pageLinks = links) }
                 }
@@ -151,38 +163,104 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     /**
-     * Extracts the document's text layer.
+     * Extracts the text of one page, at most once per page per document.
      *
-     * The failure branch is the important part: extraction for a large document
-     * can throw [OutOfMemoryError] inside PDFBox, and previously that error was
-     * discarded silently.
+     * The failure branch matters: extraction can still throw (corrupt object
+     * stream, unsupported encryption, out of memory) and that used to be
+     * discarded silently, leaving the UI stuck on "No selectable text".
      */
-    private suspend fun loadText(uri: Uri, expectedGeneration: Int) {
-        runCatching { repository.text(uri) }
-            .onSuccess { (texts, runs) ->
+    fun requestPageText(uri: Uri, page: Int) {
+        if (page < 0 || uri.toString() != loadedUri) return
+        if (textRequests.putIfAbsent(page, true) != null) return
+        val expectedGeneration = generation
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val text = repository.pageText(uri, page)
+                val runs = repository.pageTextRuns(uri, page)
+                text to runs
+            }.onSuccess { (text, runs) ->
                 if (expectedGeneration != generation) return@onSuccess
-                val hasText = texts.any { page -> page.text.isNotBlank() }
                 _uiState.update { state ->
                     state.copy(
-                        pageTexts = texts,
-                        textRuns = runs,
-                        textState = if (hasText) PdfTextLoadState.Ready else PdfTextLoadState.ImageOnly,
+                        pageTexts = state.pageTexts + (page to text),
+                        textRuns = if (runs.isEmpty()) state.textRuns else state.textRuns + (page to runs),
+                        textState = when {
+                            text.isNotBlank() -> PdfTextLoadState.Ready
+                            state.textState == PdfTextLoadState.Ready -> PdfTextLoadState.Ready
+                            else -> PdfTextLoadState.ImageOnly
+                        },
                         textError = null,
                     )
                 }
-            }
-            .onFailure { error ->
+            }.onFailure { error ->
                 if (error is CancellationException) throw error
+                textRequests.remove(page)
                 if (expectedGeneration != generation) return@onFailure
                 _uiState.update { state ->
                     state.copy(
-                        pageTexts = emptyList(),
-                        textRuns = emptyList(),
                         textState = PdfTextLoadState.Failed,
                         textError = error.describeForUser(),
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Streams search results page by page so a 109-page document reports
+     * progress instead of blocking, and so early hits are usable immediately.
+     */
+    fun search(uri: Uri, query: String) {
+        searchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            _uiState.update {
+                it.copy(searchQuery = query, searchResults = emptyList(), searchProgress = 0f, searchRunning = false)
+            }
+            return
+        }
+        val expectedGeneration = generation
+        _uiState.update {
+            it.copy(searchQuery = query, searchResults = emptyList(), searchProgress = 0f, searchRunning = true)
+        }
+        searchJob = viewModelScope.launch(Dispatchers.IO) {
+            val count = _uiState.value.pageCount
+            val found = ArrayList<PdfSearchResult>()
+            var failure: Throwable? = null
+            for (page in 0 until count) {
+                ensureActive()
+                if (expectedGeneration != generation) return@launch
+                val text = runCatching { repository.pageText(uri, page) }
+                    .onFailure { error ->
+                        if (error is CancellationException) throw error
+                        if (failure == null) failure = error
+                    }
+                    .getOrDefault("")
+                val hits = PdfTextSearch.matches(page, text, trimmed)
+                if (hits.isNotEmpty()) {
+                    found.addAll(hits)
+                    val snapshot = ArrayList(found)
+                    _uiState.update { it.copy(searchResults = snapshot) }
+                }
+                _uiState.update { it.copy(searchProgress = (page + 1f) / count.coerceAtLeast(1)) }
+            }
+            val error = failure
+            _uiState.update { state ->
+                state.copy(
+                    searchRunning = false,
+                    searchProgress = 1f,
+                    textError = if (error != null && found.isEmpty()) error.describeForUser() else state.textError,
+                    textState = if (error != null && found.isEmpty()) PdfTextLoadState.Failed else state.textState,
+                )
+            }
+        }
+    }
+
+    fun clearSearch() {
+        searchJob?.cancel()
+        _uiState.update {
+            it.copy(searchQuery = "", searchResults = emptyList(), searchProgress = 0f, searchRunning = false)
+        }
     }
 
     private fun Throwable.describeForUser(): String = when (this) {
@@ -291,6 +369,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     override fun onCleared() {
         generation++
         wakeUp.close()
+        searchJob?.cancel()
         synchronized(queueLock) { queue.clear(); queuedPages.clear() }
         Snapshot.withMutableSnapshot { pages.clear(); pageAspectRatios.clear() }
         if (::cache.isInitialized) cache.clear()
