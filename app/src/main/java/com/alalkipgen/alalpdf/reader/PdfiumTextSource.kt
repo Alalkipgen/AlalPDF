@@ -44,6 +44,18 @@ class PdfiumTextSource private constructor(
         return runs
     }
 
+    /** Page size in PDF points, or null when the page cannot be opened. */
+    fun pageSizePoints(page: Int): android.util.SizeF? = runCatching {
+        synchronized(lock) {
+            document.openPage(page).use { pdfPage ->
+                android.util.SizeF(
+                    pdfPage.getPageWidthPoint().toFloat(),
+                    pdfPage.getPageHeightPoint().toFloat(),
+                )
+            }
+        }
+    }.getOrNull()
+
     /** Page text in the same order as [charRuns]. */
     fun pageText(page: Int): String {
         val runs = charRuns(page)

@@ -56,11 +56,15 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
     var placing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var blocks by remember { mutableStateOf<List<PdfTextBlock>>(emptyList()) }
 
     LaunchedEffect(uri) { pages = List(repository.count(uri)) { PagePlan(it) } }
     LaunchedEffect(uri, selected, pages) {
         val source = pages.getOrNull(selected)?.source ?: return@LaunchedEffect
         preview = repository.renderPage(uri, source, 900)
+        // Existing paragraphs, so tapping one opens it for editing instead of
+        // only ever stacking a new box on top of the page.
+        blocks = repository.textBlocks(uri, source)
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
@@ -106,7 +110,9 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
         ) {
             Text(
                 if (placing) "Tap the page where the text should go"
-                else "Page " + (selected + 1) + " of " + pages.size.coerceAtLeast(1),
+                else if (blocks.isEmpty()) "Page " + (selected + 1) + " of " + pages.size.coerceAtLeast(1)
+                else "Page " + (selected + 1) + " of " + pages.size.coerceAtLeast(1) +
+                    " \u00b7 tap a paragraph to edit it",
                 style = MaterialTheme.typography.labelLarge,
             )
 
@@ -132,7 +138,31 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
                             detectTapGestures { tap ->
                                 val fx = (tap.x / size.width.toFloat()).coerceIn(0f, .95f)
                                 val fy = (tap.y / size.height.toFloat()).coerceIn(0f, .95f)
+                                val block = if (!placing && editing !in notes.indices) {
+                                    blocks.firstOrNull { candidate ->
+                                        fx >= candidate.left - .02f && fx <= candidate.right + .02f &&
+                                            fy >= candidate.top - .01f && fy <= candidate.bottom + .01f
+                                    }
+                                } else {
+                                    null
+                                }
                                 when {
+                                    block != null -> {
+                                        // Rewrite the paragraph in place: the
+                                        // original is covered and the new text
+                                        // is drawn at the same spot.
+                                        notes = notes + TextNote(
+                                            page = selected,
+                                            text = block.text,
+                                            xFraction = block.left,
+                                            yFraction = block.top,
+                                            fontSize = block.fontSizePoints,
+                                            widthFraction = (block.right - block.left + .02f).coerceIn(.1f, .96f),
+                                            whiteout = true,
+                                            whiteoutHeightFraction = (block.bottom - block.top + .01f).coerceIn(.01f, .98f),
+                                        )
+                                        editing = notes.lastIndex
+                                    }
                                     placing -> {
                                         notes = notes + TextNote(page = selected, text = "New text", xFraction = fx, yFraction = fy)
                                         editing = notes.lastIndex
