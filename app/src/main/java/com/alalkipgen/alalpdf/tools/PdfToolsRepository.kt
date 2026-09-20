@@ -12,8 +12,11 @@ import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
-import com.tom_roush.pdfbox.pdmodel.font.PDType0Font
+import com.tom_roush.pdfbox.multipdf.LayerUtility
 import com.tom_roush.pdfbox.pdmodel.graphics.image.LosslessFactory
+import com.tom_roush.pdfbox.util.Matrix
+import com.alalkipgen.alalpdf.reader.PdfTextRun
+import com.alalkipgen.alalpdf.reader.PdfiumTextSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -46,6 +49,20 @@ data class ImageNote(
     val yFraction: Float = .1f,
     val widthFraction: Float = .35f,
     val heightFraction: Float = .25f,
+)
+
+/**
+ * A block of text that already exists in the document, located with PDFium.
+ * Coordinates are fractions of the page measured from the top-left corner.
+ */
+data class PdfTextBlock(
+    val page: Int,
+    val text: String,
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+    val fontSizePoints: Float,
 )
 
 data class EditPlan(
@@ -86,16 +103,14 @@ class PdfToolsRepository(private val context: Context) {
         context.contentResolver.openInputStream(input)!!.use { stream ->
             PDDocument.load(stream).use { document ->
                 reorder(document, plan.pages)
+                // Overlay documents must stay open until the target is saved,
+                // otherwise the imported form loses its resources.
+                val overlays = ArrayList<PDDocument>()
+                val scratch = ArrayList<File>()
                 if (document.numberOfPages > 0) {
-                    val font = if (plan.texts.any { it.text.isNotBlank() }) {
-                        context.resources.openRawResource(com.alalkipgen.alalpdf.R.font.pyidaungsu_regular)
-                            .use { PDType0Font.load(document, it, true) }
-                    } else {
-                        null
-                    }
                     plan.texts.filter { it.text.isNotBlank() }.forEach { note ->
                         val page = document.getPage(note.page.coerceIn(0, document.numberOfPages - 1))
-                        drawText(document, page, note, font!!)
+                        drawText(document, page, note, overlays, scratch)
                     }
                     plan.images.forEach { note ->
                         val page = document.getPage(note.page.coerceIn(0, document.numberOfPages - 1))
@@ -103,6 +118,8 @@ class PdfToolsRepository(private val context: Context) {
                     }
                 }
                 document.save(temp)
+                overlays.forEach { runCatching { it.close() } }
+                scratch.forEach { runCatching { it.delete() } }
             }
         }
         check(temp.length() > 5L) { "Edited PDF is empty" }
@@ -142,64 +159,130 @@ class PdfToolsRepository(private val context: Context) {
         }
     }
 
-    private fun drawText(document: PDDocument, page: PDPage, note: TextNote, font: PDType0Font) {
+    /**
+     * Stamps a note onto a page.
+     *
+     * The text is rendered by Android first and imported as a form XObject, so
+     * Burmese (and every other complex script) is shaped correctly instead of
+     * coming out as a row of broken clusters, and the page keeps its original
+     * content untouched underneath.
+     */
+    private fun drawText(
+        document: PDDocument,
+        page: PDPage,
+        note: TextNote,
+        overlays: MutableList<PDDocument>,
+        scratch: MutableList<File>,
+    ) {
         val box = page.mediaBox
         val left = box.lowerLeftX + box.width * note.xFraction
         val top = box.upperRightY - box.height * note.yFraction
         val maxWidth = (box.width * note.widthFraction).coerceAtLeast(40f)
-        val lines = wrap(note.text, font, note.fontSize, maxWidth)
-        val leading = note.fontSize * 1.35f
+
+        val overlay = ShapedTextOverlay.render(
+            context = context,
+            text = note.text,
+            widthPoints = maxWidth,
+            fontSizePoints = note.fontSize,
+        )
 
         PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true, true).use { canvas ->
             if (note.whiteout) {
-                // A real rectangle the user sized, not a fixed 48pt bar.
-                val height = (box.height * note.whiteoutHeightFraction).coerceAtLeast(leading * lines.size)
+                val height = (box.height * note.whiteoutHeightFraction)
+                    .coerceAtLeast(overlay?.heightPoints ?: note.fontSize)
                 canvas.setNonStrokingColor(255, 255, 255)
                 canvas.addRect(left, (top - height).coerceAtLeast(0f), maxWidth, height)
                 canvas.fill()
             }
-            if (lines.isEmpty()) return@use
-            canvas.setNonStrokingColor(0, 0, 0)
-            canvas.beginText()
-            canvas.setFont(font, note.fontSize)
-            canvas.setLeading(leading.toDouble())
-            canvas.newLineAtOffset(left, top - note.fontSize)
-            lines.forEachIndexed { index, line ->
-                if (index > 0) canvas.newLine()
-                canvas.showText(line)
-            }
-            canvas.endText()
+        }
+        if (overlay == null) return
+
+        val overlayDocument = runCatching { PDDocument.load(overlay.file) }.getOrNull() ?: return
+        overlays.add(overlayDocument)
+        scratch.add(overlay.file)
+        val form = runCatching { LayerUtility(document).importPageAsForm(overlayDocument, 0) }.getOrNull()
+            ?: return
+        PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true, true).use { canvas ->
+            canvas.saveGraphicsState()
+            canvas.transform(
+                Matrix.getTranslateInstance(left, (top - overlay.heightPoints).coerceAtLeast(0f)),
+            )
+            canvas.drawForm(form)
+            canvas.restoreGraphicsState()
         }
     }
 
-    /** Breaks text on its own newlines first, then on measured font width. */
-    private fun wrap(text: String, font: PDType0Font, fontSize: Float, maxWidth: Float): List<String> {
-        fun width(value: String): Float =
-            runCatching { font.getStringWidth(value) / 1000f * fontSize }.getOrDefault(Float.MAX_VALUE)
-
-        val output = ArrayList<String>()
-        text.split("\n").forEach { paragraph ->
-            if (paragraph.isBlank()) { output.add(""); return@forEach }
-            var line = StringBuilder()
-            paragraph.split(" ").filter { it.isNotEmpty() }.forEach { word ->
-                val candidate = if (line.isEmpty()) word else line.toString() + " " + word
-                if (width(candidate) <= maxWidth || line.isEmpty()) {
-                    line = StringBuilder(candidate)
-                } else {
-                    output.add(line.toString())
-                    line = StringBuilder(word)
-                }
-                // A single word longer than the column still has to break.
-                while (width(line.toString()) > maxWidth && line.length > 1) {
-                    var cut = line.length - 1
-                    while (cut > 1 && width(line.substring(0, cut)) > maxWidth) cut--
-                    output.add(line.substring(0, cut))
-                    line = StringBuilder(line.substring(cut))
-                }
-            }
-            if (line.isNotEmpty()) output.add(line.toString())
+    /**
+     * Text blocks that already exist on a page, so the editor can let the user
+     * tap a paragraph and rewrite it in place instead of only stacking new
+     * boxes on top of the page.
+     */
+    suspend fun textBlocks(uri: Uri, page: Int): List<PdfTextBlock> = withContext(Dispatchers.IO) {
+        val source = PdfiumTextSource.open(context, uri, null) ?: return@withContext emptyList()
+        source.use { pdfium ->
+            val runs = pdfium.charRuns(page).filter { it.right > it.left && it.bottom > it.top }
+            if (runs.isEmpty()) return@withContext emptyList()
+            val height = pdfium.pageSizePoints(page)?.height ?: 842f
+            groupBlocks(runs, page, height)
         }
-        return output
+    }
+
+    private fun groupBlocks(runs: List<PdfTextRun>, page: Int, pageHeightPoints: Float): List<PdfTextBlock> {
+        val lines = ArrayList<MutableList<PdfTextRun>>()
+        runs.forEach { run ->
+            val line = lines.lastOrNull()
+            val reference = line?.lastOrNull()
+            val sameLine = reference != null &&
+                kotlin.math.abs(
+                    (run.top + run.bottom) / 2f - (reference.top + reference.bottom) / 2f,
+                ) <= (reference.bottom - reference.top) * 0.6f
+            if (sameLine) line.add(run) else lines.add(mutableListOf(run))
+        }
+
+        val blocks = ArrayList<PdfTextBlock>()
+        var current = ArrayList<MutableList<PdfTextRun>>()
+
+        fun flush() {
+            if (current.isEmpty()) return
+            val all = current.flatten()
+            val left = all.minOf { it.left }
+            val right = all.maxOf { it.right }
+            val top = all.minOf { it.top }
+            val bottom = all.maxOf { it.bottom }
+            val text = current.joinToString("\n") { line -> line.joinToString("") { it.text } }.trim()
+            val lineHeight = current.maxOf { line -> line.maxOf { it.bottom } - line.minOf { it.top } }
+            if (text.isNotBlank()) {
+                blocks.add(
+                    PdfTextBlock(
+                        page = page,
+                        text = text,
+                        left = left,
+                        top = top,
+                        right = right,
+                        bottom = bottom,
+                        // A glyph box is roughly the font size, minus the bits
+                        // that hang below the baseline.
+                        fontSizePoints = (lineHeight * pageHeightPoints * 0.85f).coerceIn(6f, 72f),
+                    ),
+                )
+            }
+            current = ArrayList()
+        }
+
+        lines.forEach { line ->
+            val previous = current.lastOrNull()
+            if (previous == null) {
+                current.add(line)
+                return@forEach
+            }
+            val previousBottom = previous.maxOf { it.bottom }
+            val lineTop = line.minOf { it.top }
+            val lineHeight = line.maxOf { it.bottom } - lineTop
+            val gap = lineTop - previousBottom
+            if (gap in -lineHeight..(lineHeight * 1.4f)) current.add(line) else { flush(); current.add(line) }
+        }
+        flush()
+        return blocks
     }
 
     private fun drawImage(document: PDDocument, page: PDPage, note: ImageNote) {

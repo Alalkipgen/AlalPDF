@@ -1,44 +1,59 @@
-# Alal PDF v0.1.3-beta
+# Alal PDF v0.2.0-beta
 
-## Fixes in this release
+## Myanmar text
 
-- Text selection now works. Word boxes come from the PDF text layer, and a long press opens Drive-style selection with drag handles and a Copy / Search / Share bar.
-- Search now finds text. Pages are extracted one at a time with a real error path, every match on a page is reported, and tapping a result jumps to the page.
-- Myanmar text is handled correctly. Text is NFC-normalised, invisible characters are stripped, and Zawgyi is detected and converted only when it really is Zawgyi, so Unicode Burmese pages are left untouched and match either encoding.
-- Page rendering is faster. A cheap low-resolution pass shows the page first, the render window is wider, and a dead per-pixel night-invert loop and a duplicate retry delay were removed.
-- The thumbnail grid shows every page. Thumbnails come from a dedicated 160 px memory and disk cache instead of the live render map.
-- Long document titles wrap over up to three lines and shrink instead of being cut off.
-- Edit PDF is usable: the page renders underneath while editing, notes are placed by tapping, text wraps and keeps line breaks, whiteout is a sized rectangle, and page reordering keeps outlines and links intact.
+- Zawgyi is now detected with Google's `myanmar-tools` n-gram model instead of
+  hand written rules. Unicode Burmese pages are no longer mistaken for Zawgyi
+  and mangled; text on screen is never silently rewritten, and a Zawgyi page
+  offers an explicit "show Unicode" switch.
+- Pyidaungsu is used for the whole interface, so Burmese renders correctly even
+  on devices that ship an old Myanmar font.
+- Text written into a PDF (both Create PDF and Edit PDF) is shaped by Android's
+  text engine and embedded as real vector text, so Burmese keeps its stacked
+  and reordered glyphs.
 
-## Features
+## Reading
 
-- Local PDF opening and page rendering
-- Text selection, copy, and in-document search
-- Recent documents and reading-progress restoration
-- Bookmarks and page navigation
-- Thumbnail grid
-- Basic PDF editing: notes, whiteout, page reordering
-- Light, dark, and system themes with night-mode rendering
-- Android share action
+- Text selection is now character level, backed by PDFium. Both handles can be
+  dragged after the first long press, they have a full sized touch target,
+  dragging past the edge scrolls the page, and Myanmar syllables are never cut
+  in half.
+- The reader top bar no longer covers the first lines of a page.
+
+## Creating and editing
+
+- Create Text PDF: the title bar slides away while writing and returns when the
+  page is scrolled back up.
+- Edit PDF: tapping an existing paragraph opens it for editing in place, keeping
+  its position, width and text size. "Rewrite page" replaces the whole page text
+  when the original layout does not matter.
 
 ## Requirements
 
-Minimum Android version: Android 8.0 (API 26). This release is distributed as an APK and is not available through Google Play Store.
+Minimum Android version: Android 8.0 (API 26). Distributed as an APK; not
+available through Google Play Store.
 
 ## Installation
 
-Download the APK asset from this GitHub Release. Enable **Install unknown apps** for the browser or file manager that opens the APK, then open it and confirm installation.
-
-This release shares the same `applicationId` as earlier builds and has a higher `versionCode`, so it installs as an update over the previous build.
+Download the APK asset from this GitHub Release, enable **Install unknown apps**
+for the browser or file manager that opens it, then open it and confirm. The
+`applicationId` is unchanged and the `versionCode` is higher, so it installs as
+an update over the previous build.
 
 ## Known limitations
 
-OCR, text reflow, annotations, signatures, and PDF merge/split are not included.
+OCR, text reflow across pages, annotations, signatures and PDF merge/split are
+not included. Rewriting a page replaces its text layer, so the original layout
+of that page is not preserved.
 
 ## Privacy
 
-Alal PDF is offline-only, requests no `INTERNET` permission, and does not send PDF content outside the device.
+Alal PDF is offline only, requests no `INTERNET` permission, and does not send
+PDF content off the device.
 
 ## Third-party dependencies and licenses
 
-The application uses Kotlin, Kotlin Coroutines, AndroidX, Jetpack Compose, Material 3, Room, PDFBox-Android, Android Gradle Plugin, Gradle, and AndroidX Test. These upstream projects are distributed under the Apache License 2.0. Dependency versions are declared in `app/build.gradle.kts`; consult upstream notices for complete license text.
+Kotlin, Kotlin Coroutines, AndroidX, Jetpack Compose, Material 3, Room,
+PDFBox-Android, PDFium (`io.legere:pdfiumandroid`), Google myanmar-tools, the
+Android Gradle Plugin and Gradle. See `THIRD_PARTY_NOTICES.md` for the licences,
+including the SIL Open Font License covering the bundled Pyidaungsu fonts.

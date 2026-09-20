@@ -56,11 +56,16 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
     var placing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var blocks by remember { mutableStateOf<List<PdfTextBlock>>(emptyList()) }
+    var reflow by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(uri) { pages = List(repository.count(uri)) { PagePlan(it) } }
     LaunchedEffect(uri, selected, pages) {
         val source = pages.getOrNull(selected)?.source ?: return@LaunchedEffect
         preview = repository.renderPage(uri, source, 900)
+        // Existing paragraphs, so tapping one opens it for editing instead of
+        // only ever stacking a new box on top of the page.
+        blocks = repository.textBlocks(uri, source)
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
@@ -106,7 +111,9 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
         ) {
             Text(
                 if (placing) "Tap the page where the text should go"
-                else "Page " + (selected + 1) + " of " + pages.size.coerceAtLeast(1),
+                else if (blocks.isEmpty()) "Page " + (selected + 1) + " of " + pages.size.coerceAtLeast(1)
+                else "Page " + (selected + 1) + " of " + pages.size.coerceAtLeast(1) +
+                    " \u00b7 tap a paragraph to edit it",
                 style = MaterialTheme.typography.labelLarge,
             )
 
@@ -132,7 +139,31 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
                             detectTapGestures { tap ->
                                 val fx = (tap.x / size.width.toFloat()).coerceIn(0f, .95f)
                                 val fy = (tap.y / size.height.toFloat()).coerceIn(0f, .95f)
+                                val block = if (!placing && editing !in notes.indices) {
+                                    blocks.firstOrNull { candidate ->
+                                        fx >= candidate.left - .02f && fx <= candidate.right + .02f &&
+                                            fy >= candidate.top - .01f && fy <= candidate.bottom + .01f
+                                    }
+                                } else {
+                                    null
+                                }
                                 when {
+                                    block != null -> {
+                                        // Rewrite the paragraph in place: the
+                                        // original is covered and the new text
+                                        // is drawn at the same spot.
+                                        notes = notes + TextNote(
+                                            page = selected,
+                                            text = block.text,
+                                            xFraction = block.left,
+                                            yFraction = block.top,
+                                            fontSize = block.fontSizePoints,
+                                            widthFraction = (block.right - block.left + .02f).coerceIn(.1f, .96f),
+                                            whiteout = true,
+                                            whiteoutHeightFraction = (block.bottom - block.top + .01f).coerceIn(.01f, .98f),
+                                        )
+                                        editing = notes.lastIndex
+                                    }
                                     placing -> {
                                         notes = notes + TextNote(page = selected, text = "New text", xFraction = fx, yFraction = fy)
                                         editing = notes.lastIndex
@@ -204,9 +235,59 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
                 FilledTonalButton(onClick = { placing = true; editing = -1 }) {
                     Icon(Icons.Default.Add, null); Text(" Add text")
                 }
+                FilledTonalButton(
+                    onClick = { reflow = blocks.joinToString("\n\n") { it.text } },
+                    enabled = blocks.isNotEmpty(),
+                ) { Icon(Icons.Default.Edit, null); Text(" Rewrite page") }
                 FilledTonalButton(onClick = { picker.launch(arrayOf("image/*")) }) {
                     Icon(Icons.Default.AddPhotoAlternate, null); Text(" Add image")
                 }
+            }
+
+            // ---- Whole page rewrite ------------------------------------
+            if (reflow != null) {
+                val draft = reflow!!
+                AlertDialog(
+                    onDismissRequest = { reflow = null },
+                    title = { Text("Rewrite page " + (selected + 1)) },
+                    text = {
+                        Column {
+                            Text(
+                                "The whole page is replaced with this text. Images and " +
+                                    "the original layout of this page are not kept.",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            OutlinedTextField(
+                                value = draft,
+                                onValueChange = { reflow = it },
+                                modifier = Modifier.fillMaxWidth().height(320.dp),
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val text = reflow.orEmpty()
+                            val left = blocks.minOf { it.left }
+                            val top = blocks.minOf { it.top }
+                            val right = blocks.maxOf { it.right }
+                            val bottom = blocks.maxOf { it.bottom }
+                            val size = blocks.map { it.fontSizePoints }.sorted()[blocks.size / 2]
+                            notes = notes.filterNot { it.page == selected } + TextNote(
+                                page = selected,
+                                text = text,
+                                xFraction = left,
+                                yFraction = top,
+                                fontSize = size,
+                                widthFraction = (right - left).coerceIn(.1f, .96f),
+                                whiteout = true,
+                                whiteoutHeightFraction = (bottom - top + .02f).coerceIn(.02f, .98f),
+                            )
+                            editing = notes.lastIndex
+                            reflow = null
+                        }) { Text("Replace page text") }
+                    },
+                    dismissButton = { TextButton(onClick = { reflow = null }) { Text("Cancel") } },
+                )
             }
 
             // ---- Selected note editor ----------------------------------

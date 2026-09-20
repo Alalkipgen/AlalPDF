@@ -23,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -88,7 +89,11 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
     }
     BackHandler { back() }
     val textMode = mode == CreatePdfMode.TEXT || mode == CreatePdfMode.IMAGE_TEXT
+    // Like a notes app: the bar slides away while writing downwards and comes
+    // back as soon as the page is scrolled up again.
+    val topBarScroll = TopAppBarDefaults.enterAlwaysScrollBehavior(rememberTopAppBarState())
     Scaffold(
+        modifier = Modifier.nestedScroll(topBarScroll.nestedScrollConnection),
         topBar = {
             TopAppBar(
                 navigationIcon = { IconButton(onClick = { back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
@@ -98,6 +103,7 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                         Icon(Icons.Default.Visibility, null); Spacer(Modifier.width(6.dp)); Text(if (busy) "Building…" else "Preview")
                     }
                 },
+                scrollBehavior = topBarScroll,
             )
         },
         floatingActionButton = {

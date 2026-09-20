@@ -10,6 +10,7 @@ import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
@@ -78,6 +79,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -93,6 +95,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
@@ -142,6 +145,7 @@ fun PdfReaderScreen(
     var jumpText by remember { mutableStateOf("") }
     var requestedPage by remember { mutableStateOf<Int?>(null) }
     var textOpen by remember{mutableStateOf(false)}
+    var showAsUnicode by rememberSaveable { mutableStateOf(false) }
     var searchOpen by remember{mutableStateOf(false)}
     var searchQuery by remember{mutableStateOf("")}
     var passwordText by remember{mutableStateOf("")}
@@ -155,6 +159,11 @@ fun PdfReaderScreen(
     var keepScreenOn by remember { mutableStateOf(true) }
     var lockRotation by remember { mutableStateOf(false) }
     var fullScreen by remember { mutableStateOf(false) }
+    var topBarHeight by remember { mutableStateOf(0.dp) }
+    val readerTopInset by animateDpAsState(
+        targetValue = if (fullScreen) 0.dp else topBarHeight,
+        label = "readerTopInset",
+    )
     var thumbsOpen by remember { mutableStateOf(false) }
     var autoScroll by remember { mutableStateOf(false) }
     var autoSpeed by remember { mutableFloatStateOf(2.5f) }
@@ -396,7 +405,12 @@ fun PdfReaderScreen(
                             .fillMaxHeight()
                             .horizontalScroll(horizontalScroll)
                             .width(pageWidth),
-                        contentPadding = PaddingValues(vertical = 8.dp),
+                        // The top bar floats over the pages, so the list has to
+                        // start below it or the first lines stay hidden.
+                        contentPadding = PaddingValues(
+                            top = readerTopInset + 8.dp,
+                            bottom = 8.dp,
+                        ),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(state.pageCount, key = { index -> index }) { index ->
@@ -437,6 +451,11 @@ fun PdfReaderScreen(
                                                 searchOpen = true
                                                 onSearch(selected)
                                             },
+                                            onEdgeDrag = { delta ->
+                                                // Dragging a handle past the edge
+                                                // scrolls the page, like Drive.
+                                                scope.launch { listState.scrollBy(delta * 0.35f) }
+                                            },
                                         )
                                     }
                                 } else {
@@ -467,6 +486,9 @@ fun PdfReaderScreen(
                 modifier = Modifier.align(Alignment.TopCenter),
             ) {
                     TopAppBar(
+                        modifier = Modifier.onSizeChanged {
+                            topBarHeight = with(density) { it.height.toDp() }
+                        },
                         navigationIcon = {
                             IconButton(onClick = onBack) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -743,22 +765,27 @@ fun PdfReaderScreen(
                     else -> "Extracting text\u2026"
                 }
                 val zawgyi = hasText && MyanmarText.looksLikeZawgyi(pageText)
+                val shown = if (zawgyi && showAsUnicode) MyanmarText.toUnicode(pageText) else message
                 AlertDialog(
                     onDismissRequest = { textOpen = false },
                     title = { Text("Page " + (visiblePage + 1) + " text") },
                     text = {
                         Column {
                             if (zawgyi) {
-                                Text(
-                                    "This page looks Zawgyi-encoded. Search still matches it, " +
-                                        "but other apps may show it incorrectly.",
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
+                                TextButton(onClick = { showAsUnicode = !showAsUnicode }) {
+                                    Text(
+                                        if (showAsUnicode) {
+                                            "Showing Unicode \u00b7 tap for original"
+                                        } else {
+                                            "This page is Zawgyi \u00b7 tap to show Unicode"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
                             }
                             SelectionContainer {
                                 Text(
-                                    message,
+                                    shown,
                                     Modifier.height(340.dp).verticalScroll(rememberScrollState()),
                                 )
                             }
@@ -769,7 +796,7 @@ fun PdfReaderScreen(
                             enabled = hasText,
                             onClick = {
                                 context.getSystemService(ClipboardManager::class.java)
-                                    ?.setPrimaryClip(ClipData.newPlainText("PDF", pageText))
+                                    ?.setPrimaryClip(ClipData.newPlainText("PDF", shown))
                                 textOpen = false
                             },
                         ) { Text("Copy all") }
