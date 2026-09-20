@@ -14,7 +14,24 @@ class PdfRendererSource private constructor(
 ) : Closeable {
     val pageCount: Int get() = renderer.pageCount
 
-    fun renderPage(pageIndex: Int, width: Int, nightMode: Boolean = false): Bitmap {
+    /**
+     * Renders one page.
+     *
+     * [PdfRenderer] only accepts ARGB_8888 destinations, so [config] is applied
+     * as a post-render copy. That is worth doing for thumbnails, where RGB_565
+     * halves the memory held by the cache.
+     *
+     * Night mode is deliberately *not* handled here. It used to run a
+     * getPixels/invert/setPixels pass over the whole bitmap on the render
+     * thread, which is one of the slowest things you can do per page, and the
+     * result was then discarded because the UI already applies an inverting
+     * ColorFilter when drawing.
+     */
+    fun renderPage(
+        pageIndex: Int,
+        width: Int,
+        config: Bitmap.Config = Bitmap.Config.ARGB_8888,
+    ): Bitmap {
         require(pageIndex in 0 until renderer.pageCount)
         require(width > 0)
         renderer.openPage(pageIndex).use { page ->
@@ -22,16 +39,18 @@ class PdfRendererSource private constructor(
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(Color.WHITE)
             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            if (nightMode) {
-                val pixels = IntArray(width * height)
-                bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-                pixels.indices.forEach { index ->
-                    val color = pixels[index]
-                    pixels[index] = Color.rgb(255 - Color.red(color), 255 - Color.green(color), 255 - Color.blue(color))
-                }
-                bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-            }
-            return bitmap
+            if (config == Bitmap.Config.ARGB_8888) return bitmap
+            val converted = runCatching { bitmap.copy(config, false) }.getOrNull() ?: return bitmap
+            bitmap.recycle()
+            return converted
+        }
+    }
+
+    /** Page aspect ratio (height / width) without rendering any pixels. */
+    fun pageAspectRatio(pageIndex: Int): Float {
+        require(pageIndex in 0 until renderer.pageCount)
+        renderer.openPage(pageIndex).use { page ->
+            return page.height.toFloat() / page.width.coerceAtLeast(1)
         }
     }
 

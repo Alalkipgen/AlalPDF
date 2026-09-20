@@ -33,12 +33,26 @@ class PdfReaderRepository(private val context: Context) {
     private var textIndex: PdfTextIndex? = null
     private var textIndexUri: Uri? = null
 
+    private var thumbnails: ThumbnailCache? = null
+    private var thumbnailsUri: Uri? = null
+
     suspend fun pageCount(uri: Uri, password: String? = null): Int = withContext(Dispatchers.IO) {
         synchronized(lock) { open(uri, password).pageCount }
     }
-    suspend fun render(uri: Uri, page: Int, width: Int, nightMode: Boolean = false): Bitmap = withContext(Dispatchers.IO) {
-        synchronized(lock) { open(uri, currentPassword).renderPage(page, width, nightMode) }
+
+    suspend fun render(uri: Uri, page: Int, width: Int): Bitmap = withContext(Dispatchers.IO) {
+        synchronized(lock) { open(uri, currentPassword).renderPage(page, width) }
     }
+
+    /** Cheap RGB_565 thumbnail, memoized in memory and on disk. */
+    suspend fun thumbnail(uri: Uri, page: Int, width: Int = THUMBNAIL_WIDTH_PX): Bitmap =
+        withContext(Dispatchers.IO) {
+            val cache = thumbnailCache(uri)
+            cache.get(page) ?: synchronized(lock) {
+                open(uri, currentPassword).renderPage(page, width, Bitmap.Config.RGB_565)
+            }.also { cache.put(page, it) }
+        }
+
     suspend fun links(uri: Uri): Map<Int, List<PdfPageLink>> = withContext(Dispatchers.IO) {
         runCatching { PdfLinkExtractor.extract(resolver, uri) }.getOrDefault(emptyMap())
     }
@@ -84,6 +98,15 @@ class PdfReaderRepository(private val context: Context) {
         }
     }
 
+    private fun thumbnailCache(uri: Uri): ThumbnailCache {
+        thumbnails?.takeIf { thumbnailsUri == uri }?.let { return it }
+        thumbnails?.clearMemory()
+        return ThumbnailCache(context, uri.toString()).also {
+            thumbnails = it
+            thumbnailsUri = uri
+        }
+    }
+
     fun close() {
         synchronized(lock) { clear() }
         synchronized(textLock) {
@@ -91,6 +114,9 @@ class PdfReaderRepository(private val context: Context) {
             textIndex = null
             textIndexUri = null
         }
+        thumbnails?.clearMemory()
+        thumbnails = null
+        thumbnailsUri = null
     }
 
     private fun clear() {
@@ -113,5 +139,9 @@ class PdfReaderRepository(private val context: Context) {
         return PdfRendererSource.open(ParcelFileDescriptor.open(temp, ParcelFileDescriptor.MODE_READ_ONLY)).also {
             source = it; currentUri = uri; currentPassword = password; unlockedTemp = temp
         }
+    }
+
+    private companion object {
+        const val THUMBNAIL_WIDTH_PX = 160
     }
 }
