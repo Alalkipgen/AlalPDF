@@ -13,6 +13,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.LinearLayout
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.runtime.rememberUpdatedState
@@ -74,10 +75,21 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
 
 @Composable fun rememberRichTextController() = remember { RichTextController() }
 
-@Composable fun RichTextEditor(html: String, onChange: (String) -> Unit, controller: RichTextController, modifier: Modifier, onLongLink: (EditorLink) -> Unit, onScroll: (Int) -> Unit = {}) {
+@Composable
+fun RichTextEditor(
+    html: String,
+    onChange: (String) -> Unit,
+    title: String,
+    onTitleChange: (String) -> Unit,
+    controller: RichTextController,
+    modifier: Modifier,
+    onLongLink: (EditorLink) -> Unit,
+    onScroll: (Int) -> Unit = {},
+) {
     val context = LocalContext.current
     val uri = LocalUriHandler.current
     val latestChange by rememberUpdatedState(onChange)
+    val latestTitleChange by rememberUpdatedState(onTitleChange)
     val latestLong by rememberUpdatedState(onLongLink)
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
@@ -88,8 +100,45 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
     AndroidView(
         modifier = modifier.nestedScroll(rememberNestedScrollInteropConnection()),
         factory = {
+            val titleEditor = EditText(context).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+                id = TITLE_EDITOR_ID
+                setBackgroundColor(Color.TRANSPARENT)
+                setTextColor(color)
+                setHintTextColor(hintColor)
+                textSize = 24f
+                typeface = PyidaungsuFonts.bold(context)
+                gravity = android.view.Gravity.TOP
+                hint = "Title"
+                setPadding(32, 28, 32, 18)
+                isSingleLine = true
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                    android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                setText(title)
+                setSelection(text.length)
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, a: Int, c: Int, d: Int) = Unit
+                    override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+                    override fun afterTextChanged(s: Editable?) {
+                        val clean = s?.toString()?.replace("\n", "")?.take(120).orEmpty()
+                        if (clean != s?.toString()) {
+                            setText(clean)
+                            setSelection(clean.length)
+                        } else {
+                            latestTitleChange(clean)
+                        }
+                    }
+                })
+            }
             val editor = EditText(context).apply {
-                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+                id = BODY_EDITOR_ID
                 setBackgroundColor(Color.TRANSPARENT)
                 setTextColor(color)
                 setHintTextColor(hintColor)
@@ -114,22 +163,42 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
             })
             installLinkGestures(editor, { runCatching { uri.openUri(normalizeHttpUrl(it)) } }, latestLong)
             FastEditorScrollView(context).apply {
-                // The title and the app bar follow this offset, so they can
-                // slide away while writing and come back at the top.
+                // Title and body have one scroll owner. This avoids resizing an
+                // AndroidView from Compose on every scroll pixel, which caused
+                // a relayout feedback loop, flashing and dropped frames.
                 setOnScrollChangeListener { _: View, _: Int, y: Int, _: Int, _: Int -> latestScroll(y) }
                 isFillViewport = true
                 isNestedScrollingEnabled = true
                 ViewCompat.setNestedScrollingEnabled(this, true)
                 clipToPadding = false
-                addView(editor)
+                addView(
+                    LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        )
+                        addView(titleEditor)
+                        addView(editor)
+                    },
+                )
             }
         },
         update = { scrollView ->
-            val editor = scrollView.getChildAt(0) as EditText
+            val container = scrollView.getChildAt(0) as LinearLayout
+            val titleEditor = container.findViewById<EditText>(TITLE_EDITOR_ID)
+            val editor = container.findViewById<EditText>(BODY_EDITOR_ID)
             controller.attach(editor) { latestChange(controller.html()) }
+            titleEditor.setTextColor(color)
+            titleEditor.setHintTextColor(hintColor)
+            titleEditor.typeface = PyidaungsuFonts.bold(context)
             editor.setTextColor(color)
             editor.setHintTextColor(hintColor)
             editor.typeface=pyidaungsu
+            if (titleEditor.text.toString() != title && !titleEditor.hasFocus()) {
+                titleEditor.setText(title)
+                titleEditor.setSelection(titleEditor.text.length)
+            }
             val incoming = HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
             if (editor.text.toString() != incoming && !editor.hasFocus()) {
                 editor.setText(HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY))
@@ -138,6 +207,9 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
         },
     )
 }
+
+private const val TITLE_EDITOR_ID = 0x0a1a1001
+private const val BODY_EDITOR_ID = 0x0a1a1002
 
 private fun installLinkGestures(editor: EditText, openLink: (String) -> Unit, longLink: (EditorLink) -> Unit) {
     val touchSlop = ViewConfiguration.get(editor.context).scaledTouchSlop
