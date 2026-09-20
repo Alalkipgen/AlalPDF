@@ -424,7 +424,7 @@ fun PdfReaderScreen(
                                 shadowElevation = 2.dp,
                             ) {
                                 if (bitmap != null) {
-                                    BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(pageRatio)) {
+                                    Box(Modifier.fillMaxWidth().aspectRatio(pageRatio)) {
                                         Image(
                                             bitmap = bitmap.asImageBitmap(),
                                             contentDescription = "Page " + (index + 1),
