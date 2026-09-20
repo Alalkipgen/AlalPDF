@@ -248,7 +248,7 @@ private fun ReaderRoute(
 
     val readerViewModel: PdfReaderViewModel = viewModel(
         key = "reader-$uri",
-        factory = PdfReaderViewModel.Factory(PdfReaderRepository(context.contentResolver)),
+        factory = PdfReaderViewModel.Factory(PdfReaderRepository(appContext)),
     )
     readerViewModel.initialize(appContext)
     val readerState by readerViewModel.uiState.collectAsState()

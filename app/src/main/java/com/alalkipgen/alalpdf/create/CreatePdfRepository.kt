@@ -65,11 +65,11 @@ class CreatePdfRepository(private val context: Context) {
         return links
     }
     private fun addText(doc: PdfDocument, title: String, html: String, first: Int, links: MutableList<PdfLink>): Int {
-        val styled = HtmlCompat.fromHtml(html.ifBlank { " " }, HtmlCompat.FROM_HTML_MODE_LEGACY)
-        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; linkColor = Color.rgb(0, 102, 204); textSize = 15f; typeface = Typeface.DEFAULT }
+        val styled = PyidaungsuFonts.styled(context,HtmlCompat.fromHtml(html.ifBlank { " " },HtmlCompat.FROM_HTML_MODE_LEGACY))
+        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; linkColor = Color.rgb(0, 102, 204); textSize = 15f; typeface = PyidaungsuFonts.regular(context) }
         val layout = StaticLayout.Builder.obtain(styled, 0, styled.length, paint, (pageWidth - margin * 2).toInt())
             .setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(false).setLineSpacing(3f, 1f).build()
-        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 24f; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 24f; typeface = PyidaungsuFonts.bold(context) }
         var line = 0; var number = first
         do {
             val hasTitle = number == first && title.isNotBlank(); val top = margin + if (hasTitle) 52f else 0f

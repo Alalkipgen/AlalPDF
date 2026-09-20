@@ -2,6 +2,8 @@ package com.alalkipgen.alalpdf.reader
 
 import android.app.Activity
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.content.ContextWrapper
@@ -22,6 +24,8 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -130,6 +134,7 @@ fun PdfReaderScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var jumpText by remember { mutableStateOf("") }
     var requestedPage by remember { mutableStateOf<Int?>(null) }
+    var textOpen by remember{mutableStateOf(false)}
 
     // The scrollbar and the page pill only appear while the document is moving
     // and fade away again about two seconds after scrolling stops.
@@ -476,6 +481,7 @@ fun PdfReaderScreen(
                                     Icon(Icons.Default.MoreVert, contentDescription = "More")
                                 }
                                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                    DropdownMenuItem(text={Text("Select & copy page text")},onClick={menuOpen=false;textOpen=true})
                                     DropdownMenuItem(
                                         text = { Text("Go to page") },
                                         onClick = { menuOpen = false; jumpText = ""; jumpOpen = true },
@@ -613,6 +619,7 @@ fun PdfReaderScreen(
                 }
             }
 
+            if(textOpen){val t=state.pageTexts.firstOrNull{it.page==visiblePage}?.text.orEmpty();AlertDialog(onDismissRequest={textOpen=false},title={Text("Page text")},text={SelectionContainer{Text(t.ifBlank{"No selectable text"},Modifier.height(360.dp).verticalScroll(rememberScrollState()))}},confirmButton={TextButton(onClick={context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("PDF",t));textOpen=false}){Text("Copy all")}})}
             if (jumpOpen) {
                 AlertDialog(
                     onDismissRequest = { jumpOpen = false },

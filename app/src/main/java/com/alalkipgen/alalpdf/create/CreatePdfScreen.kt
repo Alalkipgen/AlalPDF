@@ -29,11 +29,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
 
 enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
 
@@ -62,7 +62,7 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
     val context = LocalContext.current; val scope = rememberCoroutineScope(); val repository = remember(context) { CreatePdfRepository(context) }
     var title by rememberSaveable { mutableStateOf("") }; var html by rememberSaveable { mutableStateOf("") }
     var imageStrings by rememberSaveable { mutableStateOf(arrayListOf<String>()) }; var scanPaths by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
-    var previewPath by rememberSaveable { mutableStateOf<String?>(null) }; var busy by rememberSaveable { mutableStateOf(false) }; var message by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingScan by rememberSaveable{mutableStateOf<String?>(null)}; var previewPath by rememberSaveable { mutableStateOf<String?>(null) }; var busy by rememberSaveable { mutableStateOf(false) }; var message by rememberSaveable { mutableStateOf<String?>(null) }
     val editor = rememberRichTextController(); var editingLink by remember { mutableStateOf<EditorLink?>(null) }; var linkText by remember { mutableStateOf("") }; var linkUrl by remember { mutableStateOf("") }
     fun back() { if (direct) onBack() else picker() }
     fun build() {
@@ -74,11 +74,11 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
     val images = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach { runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }; imageStrings = ArrayList(imageStrings + uris.map(Uri::toString)); if (mode == CreatePdfMode.IMAGES && uris.isNotEmpty()) build()
     }
-    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap -> bitmap?.let {
-        busy = true; scope.launch { val path = withContext(Dispatchers.IO) { val dir = File(context.cacheDir, "create-scans").apply { mkdirs() }; val file = File(dir, "scan-${System.nanoTime()}.jpg"); FileOutputStream(file).use { out -> it.compress(Bitmap.CompressFormat.JPEG, 95, out) }; file.path }; scanPaths = ArrayList(scanPaths + path); busy = false; build() }
-    } }
+    fun scanUri():Uri{val f=File(File(context.cacheDir,"create-scans").apply{mkdirs()},"scan-${System.nanoTime()}.jpg");pendingScan=f.path;return FileProvider.getUriForFile(context,"${context.packageName}.fileprovider",f)}
+    val camera=rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()){ok->pendingScan?.let{path->if(ok){scanPaths=ArrayList(scanPaths+path);build()}else File(path).delete()};pendingScan=null}
+
     val output = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri -> val source = previewPath?.let(::File); if (uri != null && source != null) { busy = true; scope.launch { runCatching { repository.save(source, uri) }.onSuccess { busy = false; onCreated(uri) }.onFailure { busy = false; message = it.message } } } }
-    LaunchedEffect(mode) { if (mode == CreatePdfMode.IMAGES && imageStrings.isEmpty()) images.launch(arrayOf("image/*")); if (mode == CreatePdfMode.SCAN && scanPaths.isEmpty()) camera.launch(null) }
+    LaunchedEffect(mode) { if (mode == CreatePdfMode.IMAGES && imageStrings.isEmpty()) images.launch(arrayOf("image/*")); if (mode == CreatePdfMode.SCAN && scanPaths.isEmpty()) camera.launch(scanUri()) }
 
     val preview = previewPath?.let(::File)?.takeIf(File::exists)
     if (preview != null) {
@@ -132,7 +132,7 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                 }
                 if (mode == CreatePdfMode.SCAN) {
                     MediaRow(scanPaths, true) {}
-                    FilledTonalButton(onClick = { camera.launch(null) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.CameraAlt, null); Text(" Scan another page") }
+                    FilledTonalButton(onClick = { camera.launch(scanUri()) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.CameraAlt, null); Text(" Scan another page") }
                     if (scanPaths.isNotEmpty()) TextButton(onClick = { scanPaths.forEach { File(it).delete() }; scanPaths = arrayListOf() }) { Text("Start over") }
                 }
                 message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
