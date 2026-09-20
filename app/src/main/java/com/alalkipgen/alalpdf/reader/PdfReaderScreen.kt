@@ -86,7 +86,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -101,7 +100,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -416,8 +414,6 @@ fun PdfReaderScreen(
                             ) {
                                 if (bitmap != null) {
                                     BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(pageRatio)) {
-                                        val renderedPageWidth = maxWidth
-                                        val renderedPageHeight = maxHeight
                                         Image(
                                             bitmap = bitmap.asImageBitmap(),
                                             contentDescription = "Page " + (index + 1),
@@ -431,22 +427,17 @@ fun PdfReaderScreen(
                                                 .height(maxHeight * (link.bottom - link.top))
                                                 .clickable(role = Role.Button, onClick = { context.openWebLink(link.url) }))
                                         }
-                                        val textRuns = state.textRuns[index].orEmpty()
-                                        if (textRuns.isNotEmpty()) SelectionContainer {
-                                            Box(Modifier.fillMaxSize()) {
-                                                textRuns.forEach { run ->
-                                                    Text(
-                                                        run.text,
-                                                        color = Color.Transparent,
-                                                        fontSize = 10.sp,
-                                                        modifier = Modifier
-                                                            .offset(renderedPageWidth * run.left, renderedPageHeight * run.top)
-                                                            .width((renderedPageWidth * (run.right - run.left)).coerceAtLeast(24.dp))
-                                                            .height((renderedPageHeight * (run.bottom - run.top)).coerceAtLeast(18.dp)),
-                                                    )
-                                                }
-                                            }
-                                        }
+                                        // Real selection: long-press a word, drag
+                                        // to extend, then copy / search / share.
+                                        SelectionLayer(
+                                            runs = state.textRuns[index].orEmpty(),
+                                            modifier = Modifier.fillMaxSize(),
+                                            onSearchSelection = { selected ->
+                                                searchQuery = selected
+                                                searchOpen = true
+                                                onSearch(selected)
+                                            },
+                                        )
                                     }
                                 } else {
                                     // The placeholder uses the real page shape, so a
