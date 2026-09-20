@@ -8,6 +8,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
@@ -63,7 +65,10 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
     var previewPath by rememberSaveable { mutableStateOf<String?>(null) }; var busy by rememberSaveable { mutableStateOf(false) }; var message by rememberSaveable { mutableStateOf<String?>(null) }
     val editor = rememberRichTextController(); var editingLink by remember { mutableStateOf<EditorLink?>(null) }; var linkText by remember { mutableStateOf("") }; var linkUrl by remember { mutableStateOf("") }
     fun back() { if (direct) onBack() else picker() }
-    fun build() { busy = true; message = null; scope.launch { runCatching { repository.buildPreview(context.cacheDir, PdfSpec(mode, title, html, imageStrings.map(Uri::parse), scanPaths.map(::File))) }.onSuccess { previewPath = it.path; busy = false }.onFailure { busy = false; message = it.message } } }
+    fun build() {
+        busy = true; message = null
+        scope.launch { runCatching { repository.buildPreview(context.cacheDir, PdfSpec(mode, title, editor.html().ifBlank { html }, imageStrings.map(Uri::parse), scanPaths.map(::File))) }.onSuccess { previewPath = it.path; busy = false }.onFailure { busy = false; message = it.message } }
+    }
     fun linkDialog(link: EditorLink) { editor.select(link); editingLink = link; linkText = link.text; linkUrl = link.url }
 
     val images = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -82,28 +87,57 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
         return
     }
     BackHandler { back() }
-    Scaffold(topBar = { TopAppBar(navigationIcon = { IconButton(onClick = { back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } }, title = { Text("Create PDF") }) }, floatingActionButton = { ExtendedFloatingActionButton(onClick = { build() }, icon = { Icon(Icons.Default.Visibility, null) }, text = { Text(if (busy) "Building…" else "Preview") }) }) { p ->
-        Column(Modifier.fillMaxSize().padding(p).padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (mode == CreatePdfMode.TEXT || mode == CreatePdfMode.IMAGE_TEXT) {
-                OutlinedTextField(title, { title = it; previewPath = null }, label = { Text("Title") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    val textMode = mode == CreatePdfMode.TEXT || mode == CreatePdfMode.IMAGE_TEXT
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                navigationIcon = { IconButton(onClick = { back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                title = { Text(if (textMode) "Create Text PDF" else "Create PDF") },
+                actions = {
+                    if (textMode) TextButton(onClick = { build() }, enabled = !busy) {
+                        Icon(Icons.Default.Visibility, null); Spacer(Modifier.width(6.dp)); Text(if (busy) "Building…" else "Preview")
+                    }
+                },
+            )
+        },
+        floatingActionButton = {
+            if (!textMode) ExtendedFloatingActionButton(onClick = { build() }, icon = { Icon(Icons.Default.Visibility, null) }, text = { Text(if (busy) "Building…" else "Preview") })
+        },
+    ) { padding ->
+        if (textMode) {
+            Column(Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(title, { title = it; previewPath = null }, label = { Text("Document title") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp))
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilledTonalButton(onClick = { if (!editor.toggleBold()) message = "Select text first" }) { Text("B", fontWeight = FontWeight.Bold) }
                     FilledTonalButton(onClick = { if (!editor.toggleItalic()) message = "Select text first" }) { Text("I", fontStyle = FontStyle.Italic) }
                     FilledTonalButton(onClick = { editor.selectionLink()?.let(::linkDialog) ?: run { message = "Select text first" } }) { Icon(Icons.Default.Link, null); Text(" Link") }
                 }
-                Surface(Modifier.fillMaxWidth().height(360.dp), shape = RoundedCornerShape(18.dp), tonalElevation = 2.dp) { RichTextEditor(html, { html = it; previewPath = null }, editor, Modifier.fillMaxSize(), ::linkDialog) }
-                Text("Tap a link to open it. Press and hold to edit or remove.", style = MaterialTheme.typography.bodySmall)
+                Box(Modifier.fillMaxWidth().weight(1f).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 10.dp, vertical = 8.dp), contentAlignment = Alignment.TopCenter) {
+                    Surface(Modifier.fillMaxHeight().fillMaxWidth().widthIn(max = 840.dp), shape = RoundedCornerShape(8.dp), shadowElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
+                        RichTextEditor(html, { html = it; previewPath = null }, editor, Modifier.fillMaxSize(), ::linkDialog)
+                    }
+                }
+                if (mode == CreatePdfMode.IMAGE_TEXT) {
+                    MediaRow(imageStrings, false) { index -> imageStrings = ArrayList(imageStrings.filterIndexed { i, _ -> i != index }) }
+                    TextButton(onClick = { images.launch(arrayOf("image/*")) }, modifier = Modifier.padding(horizontal = 12.dp)) { Icon(Icons.Default.AddPhotoAlternate, null); Text(" Add images") }
+                }
+                message?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp)) }
+                Text("Swipe to scroll quickly. Tap a link to open; press and hold to edit.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
             }
-            if (mode == CreatePdfMode.IMAGES || mode == CreatePdfMode.IMAGE_TEXT) {
-                MediaRow(imageStrings, false) { i -> imageStrings = ArrayList(imageStrings.filterIndexed { index, _ -> index != i }) }
-                FilledTonalButton(onClick = { images.launch(arrayOf("image/*")) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AddPhotoAlternate, null); Text(" Add images") }
+        } else {
+            Column(Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (mode == CreatePdfMode.IMAGES) {
+                    MediaRow(imageStrings, false) { index -> imageStrings = ArrayList(imageStrings.filterIndexed { i, _ -> i != index }) }
+                    FilledTonalButton(onClick = { images.launch(arrayOf("image/*")) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AddPhotoAlternate, null); Text(" Add images") }
+                }
+                if (mode == CreatePdfMode.SCAN) {
+                    MediaRow(scanPaths, true) {}
+                    FilledTonalButton(onClick = { camera.launch(null) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.CameraAlt, null); Text(" Scan another page") }
+                    if (scanPaths.isNotEmpty()) TextButton(onClick = { scanPaths.forEach { File(it).delete() }; scanPaths = arrayListOf() }) { Text("Start over") }
+                }
+                message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                Spacer(Modifier.height(90.dp))
             }
-            if (mode == CreatePdfMode.SCAN) {
-                MediaRow(scanPaths, true) {}
-                FilledTonalButton(onClick = { camera.launch(null) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.CameraAlt, null); Text(" Scan another page") }
-                if (scanPaths.isNotEmpty()) TextButton(onClick = { scanPaths.forEach { File(it).delete() }; scanPaths = arrayListOf() }) { Text("Start over") }
-            }
-            message?.let { Text(it, color = MaterialTheme.colorScheme.error) }; Spacer(Modifier.height(90.dp))
         }
     }
     editingLink?.let { link -> AlertDialog(onDismissRequest = { editingLink = null }, title = { Text(if (link.url.isBlank()) "Add link" else "Edit link") }, text = { Column { OutlinedTextField(linkText, { linkText = it }, label = { Text("Link text") }); OutlinedTextField(linkUrl, { linkUrl = it }, label = { Text("URL") }) } }, confirmButton = { TextButton(onClick = { if (linkText.isNotBlank() && linkUrl.isNotBlank()) editor.apply(link, linkText, linkUrl); editingLink = null }) { Text("Save") } }, dismissButton = { Row { if (link.url.isNotBlank()) TextButton(onClick = { editor.remove(link); editingLink = null }) { Text("Remove") }; TextButton(onClick = { editingLink = null }) { Text("Cancel") } } }) }

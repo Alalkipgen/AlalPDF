@@ -6,7 +6,12 @@ import android.text.*
 import android.text.style.StyleSpan
 import android.text.style.URLSpan
 import android.view.GestureDetector
+import android.content.Context
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.widget.EditText
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
@@ -16,6 +21,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.text.HtmlCompat
+import androidx.core.view.ViewCompat
+import androidx.core.widget.NestedScrollView
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 data class EditorLink(val text: String, val url: String, val start: Int, val end: Int)
 
@@ -60,30 +69,114 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
 @Composable fun rememberRichTextController() = remember { RichTextController() }
 
 @Composable fun RichTextEditor(html: String, onChange: (String) -> Unit, controller: RichTextController, modifier: Modifier, onLongLink: (EditorLink) -> Unit) {
-    val context = LocalContext.current; val uri = LocalUriHandler.current
-    val latestChange by rememberUpdatedState(onChange); val latestLong by rememberUpdatedState(onLongLink)
-    val color = MaterialTheme.colorScheme.onSurface.toArgb(); val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
-    AndroidView(modifier = modifier, factory = {
-        EditText(context).apply {
-            setBackgroundColor(Color.TRANSPARENT); setTextColor(color); setHintTextColor(hintColor); textSize = 17f; gravity = android.view.Gravity.TOP; hint = "Start writing…"; setPadding(16, 12, 16, 16); isVerticalScrollBarEnabled = true; setHorizontallyScrolling(false); inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE; overScrollMode = android.view.View.OVER_SCROLL_IF_CONTENT_SCROLLS
-            setText(HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY)); setSelection(text.length)
-            fun emit() = latestChange(controller.html())
-            controller.attach(this, ::emit)
-            addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, a: Int, c: Int, d: Int) = Unit; override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit; override fun afterTextChanged(s: Editable?) = emit() })
-            fun at(e: MotionEvent): EditorLink? { val l = layout ?: return null; val line = l.getLineForVertical((e.y + scrollY - totalPaddingTop).toInt().coerceAtLeast(0)); val o = l.getOffsetForHorizontal(line, e.x + scrollX - totalPaddingLeft); val s = editableText.getSpans(o, (o + 1).coerceAtMost(editableText.length), URLSpan::class.java).firstOrNull() ?: return null; val a = editableText.getSpanStart(s); val b = editableText.getSpanEnd(s); return EditorLink(editableText.subSequence(a, b).toString(), s.url, a, b) }
-            var pressed: EditorLink? = null
-            val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() { override fun onDown(e: MotionEvent) = true; override fun onSingleTapConfirmed(e: MotionEvent): Boolean { pressed?.let { runCatching { uri.openUri(normalizeHttpUrl(it.url)) }; return true }; return false }; override fun onLongPress(e: MotionEvent) { pressed?.let { setSelection(it.start, it.end); latestLong(it) } } })
-            setOnTouchListener { _, event ->
-                if (event.actionMasked == MotionEvent.ACTION_DOWN) { pressed = at(event); parent?.requestDisallowInterceptTouchEvent(true) }
-                val linkGesture = pressed != null
-                if (linkGesture) detector.onTouchEvent(event)
-                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                    parent?.requestDisallowInterceptTouchEvent(false); postDelayed({ pressed = null }, 350)
-                }
-                linkGesture
+    val context = LocalContext.current
+    val uri = LocalUriHandler.current
+    val latestChange by rememberUpdatedState(onChange)
+    val latestLong by rememberUpdatedState(onLongLink)
+    val color = MaterialTheme.colorScheme.onSurface.toArgb()
+    val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
+    AndroidView(
+        modifier = modifier,
+        factory = {
+            val editor = EditText(context).apply {
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                setBackgroundColor(Color.TRANSPARENT)
+                setTextColor(color)
+                setHintTextColor(hintColor)
+                textSize = 17f
+                gravity = android.view.Gravity.TOP
+                hint = "Start writing…"
+                setPadding(32, 28, 32, 48)
+                isVerticalScrollBarEnabled = false
+                setHorizontallyScrolling(false)
+                inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                overScrollMode = View.OVER_SCROLL_NEVER
+                setText(HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY))
+                setSelection(text.length)
             }
+            fun emit() = latestChange(controller.html())
+            controller.attach(editor, ::emit)
+            editor.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, c: Int, d: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+                override fun afterTextChanged(s: Editable?) = emit()
+            })
+            installLinkGestures(editor, { runCatching { uri.openUri(normalizeHttpUrl(it)) } }, latestLong)
+            FastEditorScrollView(context).apply {
+                isFillViewport = true
+                isNestedScrollingEnabled = true
+                ViewCompat.setNestedScrollingEnabled(this, true)
+                clipToPadding = false
+                addView(editor)
+            }
+        },
+        update = { scrollView ->
+            val editor = scrollView.getChildAt(0) as EditText
+            controller.attach(editor) { latestChange(controller.html()) }
+            editor.setTextColor(color)
+            editor.setHintTextColor(hintColor)
+        },
+    )
+}
+
+private fun installLinkGestures(editor: EditText, openLink: (String) -> Unit, longLink: (EditorLink) -> Unit) {
+    val touchSlop = ViewConfiguration.get(editor.context).scaledTouchSlop
+    var downX = 0f
+    var downY = 0f
+    var moved = false
+    var pressed: EditorLink? = null
+    fun at(event: MotionEvent): EditorLink? {
+        val layout = editor.layout ?: return null
+        val line = layout.getLineForVertical((event.y - editor.totalPaddingTop).toInt().coerceAtLeast(0))
+        val offset = layout.getOffsetForHorizontal(line, event.x - editor.totalPaddingLeft)
+        val text = editor.editableText
+        val span = text.getSpans(offset, (offset + 1).coerceAtMost(text.length), URLSpan::class.java).firstOrNull() ?: return null
+        val a = text.getSpanStart(span)
+        val b = text.getSpanEnd(span)
+        return EditorLink(text.subSequence(a, b).toString(), span.url, a, b)
+    }
+    val detector = GestureDetector(editor.context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDown(e: MotionEvent) = true
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            val link = pressed ?: return false
+            if (moved) return false
+            openLink(link.url)
+            return true
         }
-    }, update = { v -> controller.attach(v) { latestChange(controller.html()) }; v.setTextColor(color); v.setHintTextColor(hintColor) })
+        override fun onLongPress(e: MotionEvent) {
+            val link = pressed ?: return
+            if (moved) return
+            editor.parent?.requestDisallowInterceptTouchEvent(true)
+            editor.setSelection(link.start, link.end)
+            editor.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            longLink(link)
+        }
+    })
+    editor.setOnTouchListener { _, event ->
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { downX = event.x; downY = event.y; moved = false; pressed = at(event) }
+            MotionEvent.ACTION_MOVE -> if (abs(event.x - downX) > touchSlop || abs(event.y - downY) > touchSlop) { moved = true; pressed = null }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { editor.parent?.requestDisallowInterceptTouchEvent(false); editor.postDelayed({ pressed = null }, 350) }
+        }
+        detector.onTouchEvent(event)
+        false
+    }
+}
+
+private class FastEditorScrollView(context: Context) : NestedScrollView(context) {
+    private val maximumVelocity = ViewConfiguration.get(context).scaledMaximumFlingVelocity
+    private var lastEdgeHapticAt = 0L
+    override fun fling(velocityY: Int) {
+        super.fling((velocityY * 1.25f).roundToInt().coerceIn(-maximumVelocity, maximumVelocity))
+    }
+    override fun onOverScrolled(scrollX: Int, scrollY: Int, clampedX: Boolean, clampedY: Boolean) {
+        super.onOverScrolled(scrollX, scrollY, clampedX, clampedY)
+        val now = android.os.SystemClock.uptimeMillis()
+        if (clampedY && now - lastEdgeHapticAt > 300L) {
+            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            lastEdgeHapticAt = now
+        }
+    }
 }
 
 fun normalizeHttpUrl(value: String): String { val s = value.trim(); return if (s.startsWith("http://", true) || s.startsWith("https://", true)) s else "https://$s" }
