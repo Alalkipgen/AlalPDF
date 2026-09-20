@@ -103,20 +103,54 @@ class CreatePdfRepository(private val context: Context) {
         if (s.mode == CreatePdfMode.SCAN) s.scans.forEach { BitmapFactory.decodeFile(it.path)?.let { b -> addImage(doc, b, page++); b.recycle() } }
         return links
     }
+
+    /**
+     * Lays the title out over as many lines as it needs.
+     *
+     * A long title used to be drawn with a single `drawText(title.take(120))`
+     * call, so it ran straight off the right edge of the page and lost
+     * everything past 120 characters. Titles are now wrapped to the text
+     * column and shrunk a step at a time when they grow past three lines, so
+     * the whole title is always visible.
+     */
+    private fun titleLayout(title: String): StaticLayout {
+        val available = (pageWidth - margin * 2).toInt()
+        var layout: StaticLayout? = null
+        for (size in TITLE_SIZES) {
+            val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textSize = size
+                typeface = PyidaungsuFonts.bold(context)
+            }
+            layout = StaticLayout.Builder.obtain(title, 0, title.length, paint, available)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setIncludePad(false)
+                .setLineSpacing(2f, 1f)
+                .build()
+            if (layout.lineCount <= TITLE_MAX_LINES) break
+        }
+        return layout!!
+    }
+
     private fun addText(doc: PdfDocument, title: String, html: String, first: Int, links: MutableList<PdfLink>): Int {
         val styled = PyidaungsuFonts.styled(context,HtmlCompat.fromHtml(html.ifBlank { " " },HtmlCompat.FROM_HTML_MODE_LEGACY))
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; linkColor = Color.rgb(0, 102, 204); textSize = 15f; typeface = PyidaungsuFonts.regular(context) }
         val layout = StaticLayout.Builder.obtain(styled, 0, styled.length, paint, (pageWidth - margin * 2).toInt())
             .setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(false).setLineSpacing(3f, 1f).build()
-        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 24f; typeface = PyidaungsuFonts.bold(context) }
+        val heading = if (title.isNotBlank()) titleLayout(title) else null
+        // The body starts below the measured title block instead of a fixed 52f.
+        val headingHeight = heading?.let { it.height + TITLE_GAP } ?: 0f
         var line = 0; var number = first
         do {
-            val hasTitle = number == first && title.isNotBlank(); val top = margin + if (hasTitle) 52f else 0f
+            val hasTitle = number == first && heading != null; val top = margin + if (hasTitle) headingHeight else 0f
             val start = line; val capacity = pageHeight - margin - top
             while (line < layout.lineCount && layout.getLineBottom(line) - layout.getLineTop(start) <= capacity) line++
             if (line == start && line < layout.lineCount) line++
             val pageNumber = number++; val page = doc.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create())
-            page.canvas.drawColor(Color.WHITE); if (hasTitle) page.canvas.drawText(title.take(120), margin, margin + 24f, titlePaint)
+            page.canvas.drawColor(Color.WHITE)
+            if (hasTitle && heading != null) {
+                page.canvas.save(); page.canvas.translate(margin, margin); heading.draw(page.canvas); page.canvas.restore()
+            }
             page.canvas.save(); page.canvas.clipRect(margin, top, pageWidth - margin, pageHeight - margin)
             page.canvas.translate(margin, top - layout.getLineTop(start)); layout.draw(page.canvas); page.canvas.restore()
             collectLinks(styled, layout, start, line, top, pageNumber - 1, links); doc.finishPage(page)
@@ -165,4 +199,10 @@ class CreatePdfRepository(private val context: Context) {
         page.canvas.drawBitmap(bitmap, null, RectF(l, t, l + w, t + h), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)); doc.finishPage(page)
     }
     private fun decode(uri: Uri) = resolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+
+    private companion object {
+        val TITLE_SIZES = floatArrayOf(24f, 20f, 18f)
+        const val TITLE_MAX_LINES = 3
+        const val TITLE_GAP = 16f
+    }
 }

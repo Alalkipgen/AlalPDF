@@ -14,34 +14,119 @@ import java.io.File
 
 class PdfReaderRepository(private val context: Context) {
     private val resolver = context.contentResolver
+
+    /** Guards the platform renderer, which is not thread safe. */
     private val lock = Any()
+
+    /**
+     * Guards the PDFBox text index. This is deliberately a *separate* lock:
+     * text extraction used to share the render lock, so reading text blocked
+     * every page render and scrolling froze.
+     */
+    private val textLock = Any()
+
     private var currentUri: Uri? = null
     private var currentPassword: String? = null
     private var source: PdfRendererSource? = null
     private var unlockedTemp: File? = null
 
+    private var textIndex: PdfTextIndex? = null
+    private var textIndexUri: Uri? = null
+
+    private var thumbnails: ThumbnailCache? = null
+    private var thumbnailsUri: Uri? = null
+
     suspend fun pageCount(uri: Uri, password: String? = null): Int = withContext(Dispatchers.IO) {
         synchronized(lock) { open(uri, password).pageCount }
     }
-    suspend fun render(uri: Uri, page: Int, width: Int, nightMode: Boolean = false): Bitmap = withContext(Dispatchers.IO) {
-        synchronized(lock) { open(uri, currentPassword).renderPage(page, width, nightMode) }
+
+    suspend fun render(uri: Uri, page: Int, width: Int): Bitmap = withContext(Dispatchers.IO) {
+        synchronized(lock) { open(uri, currentPassword).renderPage(page, width) }
     }
+
+    /** Cheap RGB_565 thumbnail, memoized in memory and on disk. */
+    suspend fun thumbnail(uri: Uri, page: Int, width: Int = THUMBNAIL_WIDTH_PX): Bitmap =
+        withContext(Dispatchers.IO) {
+            val cache = thumbnailCache(uri)
+            cache.get(page) ?: synchronized(lock) {
+                open(uri, currentPassword).renderPage(page, width, Bitmap.Config.RGB_565)
+            }.also { cache.put(page, it) }
+        }
+
     suspend fun links(uri: Uri): Map<Int, List<PdfPageLink>> = withContext(Dispatchers.IO) {
         runCatching { PdfLinkExtractor.extract(resolver, uri) }.getOrDefault(emptyMap())
     }
-    suspend fun text(uri: Uri): Pair<List<PdfPageText>, List<PdfTextRun>> = withContext(Dispatchers.IO) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-            val runs = synchronized(lock) {
-                val renderer = open(uri, currentPassword)
-                (0 until renderer.pageCount).flatMap(renderer::textRuns)
-            }
-            val pages = runs.groupBy(PdfTextRun::page).map { (page, items) ->
-                PdfPageText(page, items.joinToString("\n", transform = PdfTextRun::text))
-            }.sortedBy(PdfPageText::page)
-            pages to runs
-        } else PdfTextExtractor.extract(context, uri, currentPassword) to emptyList()
+
+    /**
+     * Positioned word boxes for one page, used to draw and hit-test the
+     * selection overlay.
+     *
+     * The platform renderer only exposes positioned text from API 35, which is
+     * why selection never worked on normal devices. PDFBox reports a position
+     * per glyph on every version, so it is used whenever the platform cannot
+     * answer.
+     */
+    suspend fun pageTextRuns(uri: Uri, page: Int): List<PdfTextRun> = withContext(Dispatchers.IO) {
+        val platformRuns = runsOrEmpty(uri, page)
+        if (platformRuns.isNotEmpty()) return@withContext platformRuns
+        runCatching { synchronized(textLock) { textIndex(uri).pageRuns(page) } }
+            .getOrDefault(emptyList())
     }
-    fun close() = synchronized(lock) { clear() }
+
+    /**
+     * Text for a single page. Prefers the platform renderer when it can supply
+     * positioned runs, otherwise falls back to the lazy PDFBox index.
+     */
+    suspend fun pageText(uri: Uri, page: Int): String = withContext(Dispatchers.IO) {
+        val runs = runsOrEmpty(uri, page)
+        if (runs.isNotEmpty()) {
+            MyanmarText.normalize(runs.joinToString("\n") { it.text }).trim()
+        } else {
+            synchronized(textLock) { textIndex(uri).pageText(page) }
+        }
+    }
+
+    private fun runsOrEmpty(uri: Uri, page: Int): List<PdfTextRun> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            runCatching {
+                synchronized(lock) { open(uri, currentPassword).textRuns(page) }
+            }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+
+    private fun textIndex(uri: Uri): PdfTextIndex {
+        textIndex?.takeIf { textIndexUri == uri }?.let { return it }
+        runCatching { textIndex?.close() }
+        textIndex = null
+        textIndexUri = null
+        return PdfTextIndex.open(context, uri, currentPassword).also {
+            textIndex = it
+            textIndexUri = uri
+        }
+    }
+
+    private fun thumbnailCache(uri: Uri): ThumbnailCache {
+        thumbnails?.takeIf { thumbnailsUri == uri }?.let { return it }
+        thumbnails?.clearMemory()
+        return ThumbnailCache(context, uri.toString()).also {
+            thumbnails = it
+            thumbnailsUri = uri
+        }
+    }
+
+    fun close() {
+        synchronized(lock) { clear() }
+        synchronized(textLock) {
+            runCatching { textIndex?.close() }
+            textIndex = null
+            textIndexUri = null
+        }
+        thumbnails?.clearMemory()
+        thumbnails = null
+        thumbnailsUri = null
+    }
+
     private fun clear() {
         runCatching { source?.close() }; source = null; currentUri = null; currentPassword = null
         unlockedTemp?.delete(); unlockedTemp = null
@@ -62,5 +147,9 @@ class PdfReaderRepository(private val context: Context) {
         return PdfRendererSource.open(ParcelFileDescriptor.open(temp, ParcelFileDescriptor.MODE_READ_ONLY)).also {
             source = it; currentUri = uri; currentPassword = password; unlockedTemp = temp
         }
+    }
+
+    private companion object {
+        const val THUMBNAIL_WIDTH_PX = 160
     }
 }
