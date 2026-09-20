@@ -451,6 +451,11 @@ fun PdfReaderScreen(
                                                 searchOpen = true
                                                 onSearch(selected)
                                             },
+                                            onEdgeDrag = { delta ->
+                                                // Dragging a handle past the edge
+                                                // scrolls the page, like Drive.
+                                                scope.launch { listState.scrollBy(delta * 0.35f) }
+                                            },
                                         )
                                     }
                                 } else {

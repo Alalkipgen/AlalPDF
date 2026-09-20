@@ -33,6 +33,11 @@ class PdfReaderRepository(private val context: Context) {
     private var textIndex: PdfTextIndex? = null
     private var textIndexUri: Uri? = null
 
+    /** Guards the PDFium text source used for character level selection. */
+    private val pdfiumLock = Any()
+    private var pdfium: PdfiumTextSource? = null
+    private var pdfiumUri: Uri? = null
+
     private var thumbnails: ThumbnailCache? = null
     private var thumbnailsUri: Uri? = null
 
@@ -67,6 +72,12 @@ class PdfReaderRepository(private val context: Context) {
      * answer.
      */
     suspend fun pageTextRuns(uri: Uri, page: Int): List<PdfTextRun> = withContext(Dispatchers.IO) {
+        // PDFium first: it is the only source that gives a box per character,
+        // which is what character level selection needs.
+        val charRuns = runCatching {
+            synchronized(pdfiumLock) { pdfiumSource(uri)?.charRuns(page).orEmpty() }
+        }.getOrDefault(emptyList())
+        if (charRuns.isNotEmpty()) return@withContext charRuns
         val platformRuns = runsOrEmpty(uri, page)
         if (platformRuns.isNotEmpty()) return@withContext platformRuns
         runCatching { synchronized(textLock) { textIndex(uri).pageRuns(page) } }
@@ -78,11 +89,26 @@ class PdfReaderRepository(private val context: Context) {
      * positioned runs, otherwise falls back to the lazy PDFBox index.
      */
     suspend fun pageText(uri: Uri, page: Int): String = withContext(Dispatchers.IO) {
+        val pdfiumText = runCatching {
+            synchronized(pdfiumLock) { pdfiumSource(uri)?.pageText(page).orEmpty() }
+        }.getOrDefault("")
+        if (pdfiumText.isNotBlank()) return@withContext MyanmarText.normalize(pdfiumText).trim()
         val runs = runsOrEmpty(uri, page)
         if (runs.isNotEmpty()) {
             MyanmarText.normalize(runs.joinToString("\n") { it.text }).trim()
         } else {
             synchronized(textLock) { textIndex(uri).pageText(page) }
+        }
+    }
+
+    private fun pdfiumSource(uri: Uri): PdfiumTextSource? {
+        pdfium?.takeIf { pdfiumUri == uri }?.let { return it }
+        runCatching { pdfium?.close() }
+        pdfium = null
+        pdfiumUri = null
+        return PdfiumTextSource.open(context, uri, currentPassword)?.also {
+            pdfium = it
+            pdfiumUri = uri
         }
     }
 
@@ -121,6 +147,11 @@ class PdfReaderRepository(private val context: Context) {
             runCatching { textIndex?.close() }
             textIndex = null
             textIndexUri = null
+        }
+        synchronized(pdfiumLock) {
+            runCatching { pdfium?.close() }
+            pdfium = null
+            pdfiumUri = null
         }
         thumbnails?.clearMemory()
         thumbnails = null

@@ -8,4 +8,6 @@ data class PdfTextRun(
     val top: Float,
     val right: Float,
     val bottom: Float,
+    /** True when the run is a single character rather than a whole word. */
+    val character: Boolean = false,
 )
