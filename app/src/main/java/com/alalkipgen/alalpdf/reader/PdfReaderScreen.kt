@@ -78,6 +78,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -142,6 +143,7 @@ fun PdfReaderScreen(
     var jumpText by remember { mutableStateOf("") }
     var requestedPage by remember { mutableStateOf<Int?>(null) }
     var textOpen by remember{mutableStateOf(false)}
+    var showAsUnicode by rememberSaveable { mutableStateOf(false) }
     var searchOpen by remember{mutableStateOf(false)}
     var searchQuery by remember{mutableStateOf("")}
     var passwordText by remember{mutableStateOf("")}
@@ -743,22 +745,27 @@ fun PdfReaderScreen(
                     else -> "Extracting text\u2026"
                 }
                 val zawgyi = hasText && MyanmarText.looksLikeZawgyi(pageText)
+                val shown = if (zawgyi && showAsUnicode) MyanmarText.toUnicode(pageText) else message
                 AlertDialog(
                     onDismissRequest = { textOpen = false },
                     title = { Text("Page " + (visiblePage + 1) + " text") },
                     text = {
                         Column {
                             if (zawgyi) {
-                                Text(
-                                    "This page looks Zawgyi-encoded. Search still matches it, " +
-                                        "but other apps may show it incorrectly.",
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
+                                TextButton(onClick = { showAsUnicode = !showAsUnicode }) {
+                                    Text(
+                                        if (showAsUnicode) {
+                                            "Showing Unicode \u00b7 tap for original"
+                                        } else {
+                                            "This page is Zawgyi \u00b7 tap to show Unicode"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
                             }
                             SelectionContainer {
                                 Text(
-                                    message,
+                                    shown,
                                     Modifier.height(340.dp).verticalScroll(rememberScrollState()),
                                 )
                             }
@@ -769,7 +776,7 @@ fun PdfReaderScreen(
                             enabled = hasText,
                             onClick = {
                                 context.getSystemService(ClipboardManager::class.java)
-                                    ?.setPrimaryClip(ClipData.newPlainText("PDF", pageText))
+                                    ?.setPrimaryClip(ClipData.newPlainText("PDF", shown))
                                 textOpen = false
                             },
                         ) { Text("Copy all") }
