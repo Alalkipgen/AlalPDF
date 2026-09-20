@@ -57,6 +57,7 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var blocks by remember { mutableStateOf<List<PdfTextBlock>>(emptyList()) }
+    var reflow by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(uri) { pages = List(repository.count(uri)) { PagePlan(it) } }
     LaunchedEffect(uri, selected, pages) {
@@ -234,9 +235,59 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
                 FilledTonalButton(onClick = { placing = true; editing = -1 }) {
                     Icon(Icons.Default.Add, null); Text(" Add text")
                 }
+                FilledTonalButton(
+                    onClick = { reflow = blocks.joinToString("\n\n") { it.text } },
+                    enabled = blocks.isNotEmpty(),
+                ) { Icon(Icons.Default.Edit, null); Text(" Rewrite page") }
                 FilledTonalButton(onClick = { picker.launch(arrayOf("image/*")) }) {
                     Icon(Icons.Default.AddPhotoAlternate, null); Text(" Add image")
                 }
+            }
+
+            // ---- Whole page rewrite ------------------------------------
+            if (reflow != null) {
+                val draft = reflow!!
+                AlertDialog(
+                    onDismissRequest = { reflow = null },
+                    title = { Text("Rewrite page " + (selected + 1)) },
+                    text = {
+                        Column {
+                            Text(
+                                "The whole page is replaced with this text. Images and " +
+                                    "the original layout of this page are not kept.",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            OutlinedTextField(
+                                value = draft,
+                                onValueChange = { reflow = it },
+                                modifier = Modifier.fillMaxWidth().height(320.dp),
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val text = reflow.orEmpty()
+                            val left = blocks.minOf { it.left }
+                            val top = blocks.minOf { it.top }
+                            val right = blocks.maxOf { it.right }
+                            val bottom = blocks.maxOf { it.bottom }
+                            val size = blocks.map { it.fontSizePoints }.sorted()[blocks.size / 2]
+                            notes = notes.filterNot { it.page == selected } + TextNote(
+                                page = selected,
+                                text = text,
+                                xFraction = left,
+                                yFraction = top,
+                                fontSize = size,
+                                widthFraction = (right - left).coerceIn(.1f, .96f),
+                                whiteout = true,
+                                whiteoutHeightFraction = (bottom - top + .02f).coerceIn(.02f, .98f),
+                            )
+                            editing = notes.lastIndex
+                            reflow = null
+                        }) { Text("Replace page text") }
+                    },
+                    dismissButton = { TextButton(onClick = { reflow = null }) { Text("Cancel") } },
+                )
             }
 
             // ---- Selected note editor ----------------------------------
