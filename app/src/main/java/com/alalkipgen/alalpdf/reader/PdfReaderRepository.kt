@@ -58,11 +58,19 @@ class PdfReaderRepository(private val context: Context) {
     }
 
     /**
-     * Positioned text runs for one page. Only the platform renderer can supply
-     * these, and only from API 35, so this returns an empty list elsewhere.
+     * Positioned word boxes for one page, used to draw and hit-test the
+     * selection overlay.
+     *
+     * The platform renderer only exposes positioned text from API 35, which is
+     * why selection never worked on normal devices. PDFBox reports a position
+     * per glyph on every version, so it is used whenever the platform cannot
+     * answer.
      */
     suspend fun pageTextRuns(uri: Uri, page: Int): List<PdfTextRun> = withContext(Dispatchers.IO) {
-        runsOrEmpty(uri, page)
+        val platformRuns = runsOrEmpty(uri, page)
+        if (platformRuns.isNotEmpty()) return@withContext platformRuns
+        runCatching { synchronized(textLock) { textIndex(uri).pageRuns(page) } }
+            .getOrDefault(emptyList())
     }
 
     /**
