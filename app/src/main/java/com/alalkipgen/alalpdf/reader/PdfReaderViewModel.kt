@@ -31,6 +31,8 @@ data class PdfReaderUiState(
     val pageAspectRatios: SnapshotStateMap<Int, Float> = mutableStateMapOf(),
     val defaultAspectRatio: Float = 1.414f,
     val pageLinks: Map<Int, List<PdfPageLink>> = emptyMap(),
+    val pageTexts: List<PdfPageText> = emptyList(),
+    val requiresPassword:Boolean=false,
     val errorMessage: String? = null,
 )
 
@@ -77,7 +79,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
-    fun load(uri: Uri, width: Int, initialPage: Int = 0, nightMode: Boolean = false) {
+    fun load(uri: Uri, width: Int, initialPage: Int = 0, nightMode: Boolean = false,password:String?=null) {
         if (!::cache.isInitialized) return
         val key = uri.toString()
         if (key == loadedUri && _uiState.value.pageCount > 0) {
@@ -97,7 +99,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                val count = repository.pageCount(uri)
+                val count = repository.pageCount(uri,password)
                 ensureActive()
                 if (currentGeneration != generation) return@runCatching
                 _uiState.update { state -> state.copy(
@@ -111,13 +113,14 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                     width,
                     currentGeneration,
                 )
+                runCatching { repository.text(uri) }.onSuccess { text -> if(currentGeneration==generation)_uiState.update{it.copy(pageTexts=text)} }
                 runCatching { repository.links(uri) }.onSuccess { links ->
                     if (currentGeneration == generation) _uiState.update { state -> state.copy(pageLinks = links) }
                 }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
                 if (currentGeneration == generation) _uiState.update { state ->
-                    state.copy(isLoading = false, errorMessage = error.message ?: "Unable to open PDF")
+                    state.copy(isLoading=false,requiresPassword=error is PdfPasswordRequiredException,errorMessage=if(error is PdfPasswordRequiredException)null else error.message?:"Unable to open PDF")
                 }
             }
         }

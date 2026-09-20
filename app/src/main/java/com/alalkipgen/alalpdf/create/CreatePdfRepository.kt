@@ -8,6 +8,7 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.style.URLSpan
+import android.util.Base64
 import androidx.core.text.HtmlCompat
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
@@ -17,6 +18,8 @@ import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.*
+
+data class PdfDraft(val mode: CreatePdfMode,val title:String,val bodyHtml:String,val images:List<String> = emptyList())
 
 data class PdfSpec(
     val mode: CreatePdfMode,
@@ -40,7 +43,7 @@ class CreatePdfRepository(private val context: Context) {
         val links: List<PdfLink>
         try { links = build(document, spec); FileOutputStream(target).use(document::writeTo) }
         finally { document.close() }
-        if (links.isNotEmpty()) addAnnotations(target, links)
+        finalizePdf(target, links, spec)
         target
     }
     suspend fun save(source: File, output: Uri) = withContext(Dispatchers.IO) {
@@ -65,11 +68,11 @@ class CreatePdfRepository(private val context: Context) {
         return links
     }
     private fun addText(doc: PdfDocument, title: String, html: String, first: Int, links: MutableList<PdfLink>): Int {
-        val styled = HtmlCompat.fromHtml(html.ifBlank { " " }, HtmlCompat.FROM_HTML_MODE_LEGACY)
-        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; linkColor = Color.rgb(0, 102, 204); textSize = 15f; typeface = Typeface.DEFAULT }
+        val styled = PyidaungsuFonts.styled(context,HtmlCompat.fromHtml(html.ifBlank { " " },HtmlCompat.FROM_HTML_MODE_LEGACY))
+        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; linkColor = Color.rgb(0, 102, 204); textSize = 15f; typeface = PyidaungsuFonts.regular(context) }
         val layout = StaticLayout.Builder.obtain(styled, 0, styled.length, paint, (pageWidth - margin * 2).toInt())
             .setAlignment(Layout.Alignment.ALIGN_NORMAL).setIncludePad(false).setLineSpacing(3f, 1f).build()
-        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 24f; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK; textSize = 24f; typeface = PyidaungsuFonts.bold(context) }
         var line = 0; var number = first
         do {
             val hasTitle = number == first && title.isNotBlank(); val top = margin + if (hasTitle) 52f else 0f
@@ -96,14 +99,26 @@ class CreatePdfRepository(private val context: Context) {
             }
         }
     }
-    private fun addAnnotations(file: File, links: List<PdfLink>) {
+    suspend fun readDraft(uri: Uri): PdfDraft? = withContext(Dispatchers.IO) {
+        PDFBoxResourceLoader.init(context)
+        resolver.openInputStream(uri)?.use { input -> PDDocument.load(input).use { doc ->
+            val info=doc.documentInformation
+            if(info.getCustomMetadataValue("AlalPDF-Version")==null) return@withContext null
+            fun decode(k:String)=info.getCustomMetadataValue(k)?.let{String(Base64.decode(it,Base64.NO_WRAP),Charsets.UTF_8)}.orEmpty()
+            PdfDraft(runCatching{CreatePdfMode.valueOf(info.getCustomMetadataValue("AlalPDF-Mode")?:"TEXT")}.getOrDefault(CreatePdfMode.TEXT),decode("AlalPDF-Title"),decode("AlalPDF-Body"),decode("AlalPDF-Images").lines().filter(String::isNotBlank))
+        }}
+    }
+    private fun finalizePdf(file: File, links: List<PdfLink>, spec: PdfSpec) {
         PDFBoxResourceLoader.init(context); val temp = File(file.parentFile, file.nameWithoutExtension + "-links.pdf")
         PDDocument.load(file).use { doc ->
             links.forEach { item ->
                 val link = PDAnnotationLink(); link.action = PDActionURI().apply { uri = item.url }
                 link.rectangle = PDRectangle(item.left, pageHeight - item.bottom, item.right - item.left, item.bottom - item.top)
                 doc.getPage(item.page).annotations.add(link)
-            }; doc.save(temp)
+            }
+            fun encode(v:String)=Base64.encodeToString(v.toByteArray(Charsets.UTF_8),Base64.NO_WRAP)
+            doc.documentInformation.apply { setCustomMetadataValue("AlalPDF-Version","1");setCustomMetadataValue("AlalPDF-Mode",spec.mode.name);setCustomMetadataValue("AlalPDF-Title",encode(spec.title));setCustomMetadataValue("AlalPDF-Body",encode(spec.bodyHtml));setCustomMetadataValue("AlalPDF-Images",encode(spec.images.joinToString("\n"))) }
+            doc.save(temp)
         }
         check(file.delete() && temp.renameTo(file)) { "Unable to finalize PDF links" }
     }

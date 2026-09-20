@@ -75,6 +75,7 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
     val latestLong by rememberUpdatedState(onLongLink)
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
+    val pyidaungsu=remember(context){PyidaungsuFonts.regular(context)}
     AndroidView(
         modifier = modifier,
         factory = {
@@ -84,6 +85,7 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
                 setTextColor(color)
                 setHintTextColor(hintColor)
                 textSize = 17f
+                typeface=pyidaungsu
                 gravity = android.view.Gravity.TOP
                 hint = "Start writing…"
                 setPadding(32, 28, 32, 48)
@@ -115,6 +117,7 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
             controller.attach(editor) { latestChange(controller.html()) }
             editor.setTextColor(color)
             editor.setHintTextColor(hintColor)
+            editor.typeface=pyidaungsu
         },
     )
 }
