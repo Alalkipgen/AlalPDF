@@ -331,6 +331,9 @@ private fun ReaderRoute(
             readerViewModel.renderWindow(uri, page, width, nightMode)
         },
         onRender = { page -> readerViewModel.requestPage(uri, page, width) },
+        onRequestPageText = { page -> readerViewModel.requestPageText(uri, page) },
+        onSearch = { query -> readerViewModel.search(uri, query) },
+        onClearSearch = { readerViewModel.clearSearch() },
         onPasswordSubmit = { value -> password=value;readerViewModel.load(uri,width,currentPage,nightMode,value) },
         onEditPdf = onEdit,
     )

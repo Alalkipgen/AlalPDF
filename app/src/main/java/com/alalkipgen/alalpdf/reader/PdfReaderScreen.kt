@@ -62,6 +62,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -123,6 +124,9 @@ fun PdfReaderScreen(
     onAddBookmark: () -> Unit,
     onPageSelected: (Int) -> Unit,
     onRender: (Int) -> Unit,
+    onRequestPageText: (Int) -> Unit = {},
+    onSearch: (String) -> Unit = {},
+    onClearSearch: () -> Unit = {},
     onPasswordSubmit: (String) -> Unit = {},
     onEditPdf: () -> Unit = {},
 ) {
@@ -143,7 +147,6 @@ fun PdfReaderScreen(
     var searchOpen by remember{mutableStateOf(false)}
     var searchQuery by remember{mutableStateOf("")}
     var passwordText by remember{mutableStateOf("")}
-    val searchResults=remember(state.pageTexts,searchQuery){PdfTextExtractor.search(state.pageTexts,searchQuery)}
 
     // The scrollbar and the page pill only appear while the document is moving
     // and fade away again about two seconds after scrolling stops.
@@ -185,6 +188,14 @@ fun PdfReaderScreen(
             ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
         onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+    }
+
+    // Text is pulled one page at a time, for the page actually on screen.
+    LaunchedEffect(visiblePage, state.pageCount) {
+        if (state.pageCount > 0) onRequestPageText(visiblePage)
+    }
+    LaunchedEffect(textOpen, visiblePage) {
+        if (textOpen) onRequestPageText(visiblePage)
     }
 
     LaunchedEffect(requestedPage) {
@@ -417,7 +428,7 @@ fun PdfReaderScreen(
                                                 .height(maxHeight * (link.bottom - link.top))
                                                 .clickable(role = Role.Button, onClick = { context.openWebLink(link.url) }))
                                         }
-                                        val textRuns = state.textRuns.filter { it.page == index }
+                                        val textRuns = state.textRuns[index].orEmpty()
                                         if (textRuns.isNotEmpty()) SelectionContainer {
                                             Box(Modifier.fillMaxSize()) {
                                                 textRuns.forEach { run ->
@@ -650,8 +661,129 @@ fun PdfReaderScreen(
             }
 
             if(state.requiresPassword){AlertDialog(onDismissRequest=onBack,title={Text("Password protected PDF")},text={OutlinedTextField(passwordText,{passwordText=it},label={Text("Password")},singleLine=true)},confirmButton={TextButton(onClick={onPasswordSubmit(passwordText)},enabled=passwordText.isNotBlank()){Text("Open")}},dismissButton={TextButton(onClick=onBack){Text("Cancel")}})}
-            if(searchOpen){AlertDialog(onDismissRequest={searchOpen=false},title={Text("Search document")},text={Column{OutlinedTextField(searchQuery,{searchQuery=it},label={Text("Search")});Text("${searchResults.size} page(s)");LazyColumn(Modifier.height(280.dp)){items(searchResults.size){i->val r=searchResults[i];TextButton(onClick={requestedPage=r.page;searchOpen=false},modifier=Modifier.fillMaxWidth()){Column{Text("Page ${r.page+1}");Text(r.excerpt,maxLines=3,overflow=TextOverflow.Ellipsis)}}}}}},confirmButton={TextButton(onClick={searchOpen=false}){Text("Close")}})}
-            if(textOpen){val t=state.pageTexts.firstOrNull{it.page==visiblePage}?.text.orEmpty();AlertDialog(onDismissRequest={textOpen=false},title={Text("Page text")},text={SelectionContainer{Text(t.ifBlank{"No selectable text"},Modifier.height(360.dp).verticalScroll(rememberScrollState()))}},confirmButton={TextButton(onClick={context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("PDF",t));textOpen=false}){Text("Copy all")}})}
+
+            if (searchOpen) {
+                AlertDialog(
+                    onDismissRequest = { searchOpen = false },
+                    title = { Text("Search document") },
+                    text = {
+                        Column {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                label = { Text("Search") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = { onSearch(searchQuery) },
+                                    enabled = searchQuery.isNotBlank(),
+                                ) { Text("Search") }
+                                TextButton(
+                                    onClick = { searchQuery = ""; onClearSearch() },
+                                    enabled = searchQuery.isNotBlank() || state.searchResults.isNotEmpty(),
+                                ) { Text("Clear") }
+                            }
+                            if (state.searchRunning) {
+                                Text(
+                                    "Searching\u2026 " + (state.searchProgress * 100).roundToInt() + "%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                                LinearProgressIndicator(
+                                    progress = { state.searchProgress },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            } else if (state.searchQuery.isNotBlank()) {
+                                Text(
+                                    state.searchResults.size.toString() + " match(es)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                            }
+                            if (state.textState == PdfTextLoadState.Failed) {
+                                Text(
+                                    state.textError ?: "Text extraction failed",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                            LazyColumn(Modifier.height(280.dp)) {
+                                items(state.searchResults.size) { i ->
+                                    val result = state.searchResults[i]
+                                    TextButton(
+                                        onClick = { requestedPage = result.page; searchOpen = false },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Column(Modifier.fillMaxWidth()) {
+                                            Text(
+                                                "Page " + (result.page + 1),
+                                                style = MaterialTheme.typography.labelMedium,
+                                            )
+                                            Text(
+                                                result.excerpt,
+                                                maxLines = 3,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = { TextButton(onClick = { searchOpen = false }) { Text("Close") } },
+                )
+            }
+
+            if (textOpen) {
+                val pageText = state.pageTexts[visiblePage].orEmpty()
+                val hasText = pageText.isNotBlank()
+                val message = when {
+                    hasText -> pageText
+                    state.textState == PdfTextLoadState.Failed ->
+                        "Could not read this document's text layer.\n\n" +
+                            (state.textError ?: "Unknown error")
+                    state.pageTexts.containsKey(visiblePage) ->
+                        "This page has no embedded text. It is most likely a scanned image, " +
+                            "so there is nothing to select or copy."
+                    else -> "Extracting text\u2026"
+                }
+                val zawgyi = hasText && MyanmarText.looksLikeZawgyi(pageText)
+                AlertDialog(
+                    onDismissRequest = { textOpen = false },
+                    title = { Text("Page " + (visiblePage + 1) + " text") },
+                    text = {
+                        Column {
+                            if (zawgyi) {
+                                Text(
+                                    "This page looks Zawgyi-encoded. Search still matches it, " +
+                                        "but other apps may show it incorrectly.",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                            SelectionContainer {
+                                Text(
+                                    message,
+                                    Modifier.height(340.dp).verticalScroll(rememberScrollState()),
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            enabled = hasText,
+                            onClick = {
+                                context.getSystemService(ClipboardManager::class.java)
+                                    ?.setPrimaryClip(ClipData.newPlainText("PDF", pageText))
+                                textOpen = false
+                            },
+                        ) { Text("Copy all") }
+                    },
+                    dismissButton = { TextButton(onClick = { textOpen = false }) { Text("Close") } },
+                )
+            }
+
             if (jumpOpen) {
                 AlertDialog(
                     onDismissRequest = { jumpOpen = false },
