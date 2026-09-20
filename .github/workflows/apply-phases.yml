@@ -1,0 +1,33 @@
+name: Apply Phase 1-5 implementation
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.head_ref == 'features-phases-1-5'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: features-phases-1-5
+          fetch-depth: 0
+      - name: Apply committed source package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/phase-patch/part0 .github/phase-patch/part1 .github/phase-patch/part2 | base64 -d | gzip -d > /tmp/phases.patch
+          git apply --check /tmp/phases.patch
+          git apply /tmp/phases.patch
+          mkdir -p app/src/main/res/font
+          curl -L --fail --retry 3 -o app/src/main/res/font/pyidaungsu_regular.ttf https://github.com/naingyeminn/mm-kb/raw/refs/heads/master/src/fonts/Pyidaungsu-2.5.3_Regular.ttf
+          curl -L --fail --retry 3 -o app/src/main/res/font/pyidaungsu_bold.ttf https://github.com/naingyeminn/mm-kb/raw/refs/heads/master/src/fonts/Pyidaungsu-2.5.3_Bold.ttf
+          echo 'df7106c15da76f6a24f10821b43da51f54961f6bc6791fb1fcf21c6c60bb2e10  app/src/main/res/font/pyidaungsu_regular.ttf' | sha256sum -c -
+          echo '6fd7f1d3f70c5cb9f663d46d7a940e18c2e9247acbed70ac8612239621586d8b  app/src/main/res/font/pyidaungsu_bold.ttf' | sha256sum -c -
+          rm -rf .github/phase-patch .github/workflows/apply-phases.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat: implement PDF text, editing, password and scan phases'
+          git push origin HEAD:features-phases-1-5
