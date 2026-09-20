@@ -10,7 +10,6 @@ import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
@@ -99,7 +98,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -160,10 +158,9 @@ fun PdfReaderScreen(
     var lockRotation by remember { mutableStateOf(false) }
     var fullScreen by remember { mutableStateOf(false) }
     var topBarHeight by remember { mutableStateOf(0.dp) }
-    val readerTopInset by animateDpAsState(
-        targetValue = if (fullScreen) 0.dp else topBarHeight,
-        label = "readerTopInset",
-    )
+    // The bar floats over the pages and only fades, so the reserved space must
+    // stay constant: animating it made the whole document jump on every tap.
+    val readerTopInset = topBarHeight
     var thumbsOpen by remember { mutableStateOf(false) }
     var autoScroll by remember { mutableStateOf(false) }
     var autoSpeed by remember { mutableFloatStateOf(2.5f) }
@@ -435,12 +432,7 @@ fun PdfReaderScreen(
                                             contentScale = ContentScale.FillBounds,
                                             colorFilter = nightColorFilter,
                                         )
-                                        state.pageLinks[index].orEmpty().forEach { link ->
-                                            Box(Modifier.offset(x = maxWidth * link.left, y = maxHeight * link.top)
-                                                .width(maxWidth * (link.right - link.left))
-                                                .height(maxHeight * (link.bottom - link.top))
-                                                .clickable(role = Role.Button, onClick = { context.openWebLink(link.url) }))
-                                        }
+                                        val pageLinks = state.pageLinks[index].orEmpty()
                                         // Real selection: long-press a word, drag
                                         // to extend, then copy / search / share.
                                         SelectionLayer(
@@ -450,6 +442,20 @@ fun PdfReaderScreen(
                                                 searchQuery = selected
                                                 searchOpen = true
                                                 onSearch(selected)
+                                            },
+                                            onTap = { point ->
+                                                // The overlay covers the page,
+                                                // so it forwards plain taps:
+                                                // links first, then the bar.
+                                                val link = pageLinks.firstOrNull {
+                                                    point.x >= it.left && point.x <= it.right &&
+                                                        point.y >= it.top && point.y <= it.bottom
+                                                }
+                                                if (link != null) {
+                                                    context.openWebLink(link.url)
+                                                } else {
+                                                    fullScreen = !fullScreen
+                                                }
                                             },
                                             onEdgeDrag = { delta ->
                                                 // Dragging a handle past the edge

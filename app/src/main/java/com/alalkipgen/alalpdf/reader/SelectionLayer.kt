@@ -61,6 +61,7 @@ fun SelectionLayer(
     modifier: Modifier = Modifier,
     onSearchSelection: (String) -> Unit = {},
     onEdgeDrag: (Float) -> Unit = {},
+    onTap: (Offset) -> Unit = {},
 ) {
     if (runs.isEmpty()) return
     val context = LocalContext.current
@@ -80,6 +81,12 @@ fun SelectionLayer(
         }
     }
 
+    // Everything expensive is computed once per page. The first version did a
+    // linear scan over every character and built a BreakIterator on every drag
+    // event, which is what made dragging feel like it was stuttering.
+    val lines = remember(runs) { buildLines(runs) }
+    val clusterStarts = remember(runs, pageText) { clusterStarts(pageText, charMode) }
+
     var anchor by remember(runs) { mutableStateOf(-1) }
     var focus by remember(runs) { mutableStateOf(-1) }
     var dragging by remember(runs) { mutableStateOf(DragTarget.NONE) }
@@ -96,49 +103,62 @@ fun SelectionLayer(
         fun indexAt(position: Offset): Int {
             val x = position.x / boxWidth
             val y = position.y / boxHeight
-            var best = -1
-            var bestDistance = Float.MAX_VALUE
-            runs.forEachIndexed { index, run ->
-                if (run.right <= run.left && run.bottom <= run.top) return@forEachIndexed
-                if (x >= run.left && x <= run.right && y >= run.top && y <= run.bottom) {
-                    best = index
-                    bestDistance = 0f
-                    return@forEachIndexed
+            if (lines.isEmpty()) return -1
+            // Pick the closest line first, then the closest character inside
+            // it. Both steps are binary searches, so dragging stays smooth on
+            // pages with thousands of characters.
+            var lineIndex = lines.binarySearch { line ->
+                when {
+                    y < line.top -> 1
+                    y > line.bottom -> -1
+                    else -> 0
                 }
-                // Prefer characters on the same line, exactly like a text
-                // cursor: vertical distance counts much more than horizontal.
-                val dx = when {
+            }
+            if (lineIndex < 0) {
+                val insertion = -lineIndex - 1
+                val before = (insertion - 1).coerceAtLeast(0)
+                val after = insertion.coerceAtMost(lines.lastIndex)
+                lineIndex = if (kotlin.math.abs(y - lines[before].bottom) <=
+                    kotlin.math.abs(lines[after].top - y)
+                ) {
+                    before
+                } else {
+                    after
+                }
+            }
+            val line = lines[lineIndex]
+            var best = line.firstIndex
+            var bestDistance = Float.MAX_VALUE
+            for (index in line.firstIndex..line.lastIndex) {
+                val run = runs[index]
+                if (run.right <= run.left) continue
+                val distance = when {
                     x < run.left -> run.left - x
                     x > run.right -> x - run.right
                     else -> 0f
                 }
-                val dy = when {
-                    y < run.top -> run.top - y
-                    y > run.bottom -> y - run.bottom
-                    else -> 0f
-                }
-                val distance = dx + dy * 6f
                 if (distance < bestDistance) {
                     bestDistance = distance
                     best = index
+                    if (distance == 0f) break
                 }
             }
-            return if (bestDistance <= 0.25f) best else -1
+            return best
         }
 
         /** Keeps a Myanmar syllable or an emoji in one piece while dragging. */
         fun snapToCluster(index: Int, towardsEnd: Boolean): Int {
-            if (!charMode || index < 0 || index >= runs.size) return index
-            val iterator = BreakIterator.getCharacterInstance()
-            iterator.setText(pageText)
+            if (!charMode || index < 0 || index >= runs.size || clusterStarts.isEmpty()) return index
             val offset = runStarts[index]
+            var position = clusterStarts.binarySearch(offset)
+            if (position < 0) position = (-position - 2).coerceAtLeast(0)
             val boundary = if (towardsEnd) {
-                val next = iterator.following(offset)
-                if (next == BreakIterator.DONE) pageText.length else next - 1
+                val next = position + 1
+                if (next < clusterStarts.size) clusterStarts[next] - 1 else pageText.length - 1
             } else {
-                iterator.preceding(offset + 1).takeIf { it != BreakIterator.DONE } ?: offset
+                clusterStarts[position]
             }
-            val target = runStarts.indexOfLast { it <= boundary }
+            val target = runIndexAt(runStarts, boundary)
             return if (target < 0) index else target
         }
 
@@ -154,8 +174,8 @@ fun SelectionLayer(
             val offset = runStarts[index]
             val start = iterator.preceding(offset + 1).takeIf { it != BreakIterator.DONE } ?: offset
             val end = iterator.following(offset).takeIf { it != BreakIterator.DONE } ?: pageText.length
-            anchor = runStarts.indexOfLast { it <= start }.coerceAtLeast(0)
-            focus = (runStarts.indexOfLast { it < end }).coerceIn(anchor, runs.size - 1)
+            anchor = runIndexAt(runStarts, start).coerceAtLeast(0)
+            focus = runIndexAt(runStarts, (end - 1).coerceAtLeast(start)).coerceIn(anchor, runs.size - 1)
         }
 
         /** Scrolls the page when a handle is dragged past the top or bottom edge. */
@@ -190,10 +210,15 @@ fun SelectionLayer(
         }
         val tapGestures = Modifier.pointerInput(active) {
             detectTapGestures(
-                onTap = {
+                onTap = { position ->
                     if (active) {
+                        // First tap only dismisses the selection.
                         anchor = -1
                         focus = -1
+                    } else {
+                        // Nothing is selected, so the tap belongs to the page:
+                        // links and the top bar toggle need to see it.
+                        onTap(Offset(position.x / boxWidth, position.y / boxHeight))
                     }
                 },
             )
@@ -242,16 +267,11 @@ fun SelectionLayer(
                 x = startX,
                 y = startY,
                 leading = true,
-                onDrag = { position ->
+                onDrag = { pagePosition ->
                     dragging = DragTarget.START
-                    val index = indexAt(
-                        Offset(
-                            position.x + with(density) { HANDLE_TOUCH.toPx() } / 2f,
-                            position.y,
-                        ),
-                    )
+                    val index = indexAt(pagePosition)
                     if (index >= 0) anchor = snapToCluster(index, false).coerceAtMost(last)
-                    autoScroll(position)
+                    autoScroll(pagePosition)
                 },
                 onDragEnd = { dragging = DragTarget.NONE },
             )
@@ -259,16 +279,11 @@ fun SelectionLayer(
                 x = endX,
                 y = endY,
                 leading = false,
-                onDrag = { position ->
+                onDrag = { pagePosition ->
                     dragging = DragTarget.END
-                    val index = indexAt(
-                        Offset(
-                            position.x - with(density) { HANDLE_TOUCH.toPx() } / 2f,
-                            position.y,
-                        ),
-                    )
+                    val index = indexAt(pagePosition)
                     if (index >= 0) focus = snapToCluster(index, true).coerceAtLeast(first)
-                    autoScroll(position)
+                    autoScroll(pagePosition)
                 },
                 onDragEnd = { dragging = DragTarget.NONE },
             )
@@ -327,16 +342,26 @@ private fun SelectionHandle(
     onDrag: (Offset) -> Unit,
     onDragEnd: () -> Unit,
 ) {
-    val offsetX = if (leading) x - HANDLE_TOUCH else x
+    val originX = (if (leading) x - HANDLE_TOUCH else x).coerceAtLeast(0.dp)
+    val originY = (y - HANDLE_TOUCH / 4f).coerceAtLeast(0.dp)
     Box(
         Modifier
-            .offset(x = offsetX.coerceAtLeast(0.dp), y = (y - HANDLE_TOUCH / 4f).coerceAtLeast(0.dp))
+            .offset(x = originX, y = originY)
             .size(HANDLE_TOUCH)
             .pointerInput(leading) {
+                // The finger grabs the handle somewhere, and the selection has
+                // to follow the tip of the handle from there on, otherwise the
+                // text jumps as soon as the drag starts.
+                var pointer = Offset.Zero
                 detectDragGestures(
-                    onDrag = { change, _ ->
+                    onDragStart = { start ->
+                        pointer = Offset(originX.toPx(), originY.toPx()) + start
+                    },
+                    onDrag = { change, amount ->
                         change.consume()
-                        onDrag(change.position + Offset(offsetX.toPx(), (y - HANDLE_TOUCH / 4f).toPx()))
+                        pointer += amount
+                        val tipX = if (leading) pointer.x + size.width / 2f else pointer.x - size.width / 2f
+                        onDrag(Offset(tipX, pointer.y - size.height / 4f))
                     },
                     onDragEnd = onDragEnd,
                     onDragCancel = onDragEnd,
@@ -353,6 +378,71 @@ private fun SelectionHandle(
             drawCircle(HANDLE, radius, center)
         }
     }
+}
+
+/** A row of characters that share a baseline, kept sorted for binary search. */
+private class TextLine(val top: Float, val bottom: Float, val firstIndex: Int, val lastIndex: Int)
+
+private fun buildLines(runs: List<PdfTextRun>): List<TextLine> {
+    val lines = ArrayList<TextLine>()
+    var first = -1
+    var top = 0f
+    var bottom = 0f
+    runs.forEachIndexed { index, run ->
+        if (run.right <= run.left && run.bottom <= run.top) return@forEachIndexed
+        if (first < 0) {
+            first = index
+            top = run.top
+            bottom = run.bottom
+            return@forEachIndexed
+        }
+        val center = (run.top + run.bottom) / 2f
+        val lineCenter = (top + bottom) / 2f
+        val tolerance = maxOf(bottom - top, run.bottom - run.top) * 0.6f
+        if (abs(center - lineCenter) <= maxOf(tolerance, 0.004f)) {
+            top = min(top, run.top)
+            bottom = max(bottom, run.bottom)
+        } else {
+            lines.add(TextLine(top, bottom, first, index - 1))
+            first = index
+            top = run.top
+            bottom = run.bottom
+        }
+    }
+    if (first >= 0) lines.add(TextLine(top, bottom, first, runs.lastIndex))
+    return lines.sortedBy { it.top }
+}
+
+/** Start offsets of every grapheme cluster in the page text. */
+private fun clusterStarts(pageText: String, charMode: Boolean): IntArray {
+    if (!charMode || pageText.isEmpty()) return IntArray(0)
+    val iterator = BreakIterator.getCharacterInstance()
+    iterator.setText(pageText)
+    val starts = ArrayList<Int>(pageText.length)
+    var offset = iterator.first()
+    while (offset != BreakIterator.DONE) {
+        starts.add(offset)
+        offset = iterator.next()
+    }
+    return starts.toIntArray()
+}
+
+/** Run that contains [offset] in the page text, using binary search. */
+private fun runIndexAt(runStarts: IntArray, offset: Int): Int {
+    if (runStarts.isEmpty()) return -1
+    var low = 0
+    var high = runStarts.size - 1
+    var result = 0
+    while (low <= high) {
+        val middle = (low + high) / 2
+        if (runStarts[middle] <= offset) {
+            result = middle
+            low = middle + 1
+        } else {
+            high = middle - 1
+        }
+    }
+    return result
 }
 
 private fun sameLine(a: PdfTextRun, b: PdfTextRun): Boolean {

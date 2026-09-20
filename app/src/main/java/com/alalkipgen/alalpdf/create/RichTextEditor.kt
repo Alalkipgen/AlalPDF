@@ -15,6 +15,7 @@ import android.view.ViewGroup
 import android.widget.EditText
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.toArgb
@@ -73,7 +74,7 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
 
 @Composable fun rememberRichTextController() = remember { RichTextController() }
 
-@Composable fun RichTextEditor(html: String, onChange: (String) -> Unit, controller: RichTextController, modifier: Modifier, onLongLink: (EditorLink) -> Unit) {
+@Composable fun RichTextEditor(html: String, onChange: (String) -> Unit, controller: RichTextController, modifier: Modifier, onLongLink: (EditorLink) -> Unit, onScroll: (Int) -> Unit = {}) {
     val context = LocalContext.current
     val uri = LocalUriHandler.current
     val latestChange by rememberUpdatedState(onChange)
@@ -81,6 +82,7 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
     val pyidaungsu=remember(context){PyidaungsuFonts.regular(context)}
+    val latestScroll by rememberUpdatedState(onScroll)
     // The editor lives in a NestedScrollView, so this interop connection is what
     // lets its scrolling drive the collapsing top app bar above it.
     AndroidView(
@@ -112,6 +114,9 @@ data class EditorLink(val text: String, val url: String, val start: Int, val end
             })
             installLinkGestures(editor, { runCatching { uri.openUri(normalizeHttpUrl(it)) } }, latestLong)
             FastEditorScrollView(context).apply {
+                // The title and the app bar follow this offset, so they can
+                // slide away while writing and come back at the top.
+                setOnScrollChangeListener { _: View, _: Int, y: Int, _: Int, _: Int -> latestScroll(y) }
                 isFillViewport = true
                 isNestedScrollingEnabled = true
                 ViewCompat.setNestedScrollingEnabled(this, true)
