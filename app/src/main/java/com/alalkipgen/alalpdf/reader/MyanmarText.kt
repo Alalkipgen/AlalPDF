@@ -37,10 +37,15 @@ object MyanmarText {
 
     /**
      * In Unicode the e-vowel U+1031 and the medial ra U+103C follow their
-     * consonant. In Zawgyi they are typed before it, so a leading vowel is a
-     * strong signal.
+     * consonant. In Zawgyi they are typed before it, so a leading vowel or
+     * medial ra is a strong signal.
+     *
+     * The asat U+103A must NOT be listed here: "consonant + asat + consonant"
+     * is ordinary Unicode Burmese, and treating it as Zawgyi made almost every
+     * Unicode page get "converted", which broke the searches it was meant to
+     * fix.
      */
-    private val ZAWGYI_ORDER = Regex("[\u1031\u103A][\u1000-\u1021]")
+    private val ZAWGYI_ORDER = Regex("[\u1031\u103C][\u1000-\u1021]")
 
     /** Strips invisible characters and applies NFC. */
     fun normalize(input: String): String {
