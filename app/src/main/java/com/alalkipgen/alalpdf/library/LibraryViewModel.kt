@@ -118,10 +118,14 @@ class LibraryViewModel(
         viewModelScope.launch {
             val deleted = runCatching { repository.delete(document.uri) }.getOrDefault(false)
             if (deleted || !repository.canRead(document.uri)) {
-                scannedDocuments = scannedDocuments.filterNot { it.uri == document.uri }
-                deviceDocuments = deviceDocuments.filterNot { it.uri == document.uri }
-                recentStore.remove(document.uri)
-                prefs.removeMetadata(document.uri.toString())
+                val aliases = (recentDocuments + scannedDocuments + deviceDocuments)
+                    .filter { it.canonicalKey == document.canonicalKey }
+                scannedDocuments = scannedDocuments.filterNot { it.canonicalKey == document.canonicalKey }
+                deviceDocuments = deviceDocuments.filterNot { it.canonicalKey == document.canonicalKey }
+                aliases.forEach {
+                    recentStore.remove(it.uri)
+                    prefs.removeMetadata(it.uri.toString())
+                }
                 publish(status = if (deleted) "Deleted ${document.name}" else "Removed missing file")
             } else {
                 publish(status = "This file cannot be deleted from Alal PDF")
@@ -156,12 +160,18 @@ class LibraryViewModel(
         val hidden = prefs.hidden()
         val sort = prefs.sort
         val merged = (recentDocuments + scannedDocuments + deviceDocuments)
-            .distinctBy { it.uri.toString() }
-            .filterNot { hidden.contains(it.uri.toString()) }
-            .map {
-                it.copy(
-                    favorite = favorites.contains(it.uri.toString()),
-                    pageCount = prefs.pageCount(it.uri.toString()),
+            .groupBy(PdfDocument::canonicalKey)
+            .values.mapNotNull { aliases ->
+                val visible = aliases.filterNot { hidden.contains(it.uri.toString()) }
+                if (visible.isEmpty()) return@mapNotNull null
+                val preferred = visible.maxWithOrNull(
+                    compareBy<PdfDocument> { if (it.uri.scheme == "content") 2 else 1 }
+                        .thenBy { it.lastModified }
+                ) ?: return@mapNotNull null
+                preferred.copy(
+                    lastReadPage = visible.maxOfOrNull(PdfDocument::lastReadPage) ?: 0,
+                    favorite = visible.any { favorites.contains(it.uri.toString()) },
+                    pageCount = visible.maxOfOrNull { prefs.pageCount(it.uri.toString()) } ?: 0,
                 )
             }
         val sorted = when (sort) {

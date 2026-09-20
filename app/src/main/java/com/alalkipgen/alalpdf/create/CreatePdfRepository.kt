@@ -38,20 +38,56 @@ class CreatePdfRepository(private val context: Context) {
 
     suspend fun buildPreview(cacheDir: File, spec: PdfSpec): File = withContext(Dispatchers.IO) {
         validate(spec)
+        cacheDir.listFiles { file -> file.name.startsWith("alal-preview-") && file.extension == "pdf" }
+            ?.filter { System.currentTimeMillis() - it.lastModified() > 60_000L }
+            ?.forEach(File::delete)
         val target = File(cacheDir, "alal-preview-${System.currentTimeMillis()}.pdf")
         val document = PdfDocument()
         val links: List<PdfLink>
         try { links = build(document, spec); FileOutputStream(target).use(document::writeTo) }
         finally { document.close() }
         finalizePdf(target, links, spec)
+        validatePdf(target)
         target
     }
     suspend fun save(source: File, output: Uri) = withContext(Dispatchers.IO) {
-        resolver.openOutputStream(output, "w")?.use { out -> FileInputStream(source).use { it.copyTo(out) } }
-            ?: error("Unable to create output file")
-        runCatching {
-            resolver.takePersistableUriPermission(output, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        validatePdf(source)
+        try {
+            val descriptor = resolver.openFileDescriptor(output, "rwt")
+                ?: resolver.openFileDescriptor(output, "w")
+                ?: error("Unable to create output file")
+            descriptor.use { pfd ->
+                FileOutputStream(pfd.fileDescriptor).use { out ->
+                    FileInputStream(source).use { it.copyTo(out) }
+                    out.flush()
+                    runCatching { out.fd.sync() }
+                }
+            }
+            resolver.openInputStream(output)?.use { input ->
+                val header = ByteArray(5)
+                check(input.read(header) == 5 && String(header, Charsets.US_ASCII) == "%PDF-") {
+                    "The saved file is incomplete"
+                }
+            } ?: error("Unable to verify saved PDF")
+            resolver.openInputStream(output)?.use { input ->
+                PDDocument.load(input).use { check(it.numberOfPages > 0) }
+            } ?: error("Unable to verify saved PDF")
+            runCatching {
+                resolver.takePersistableUriPermission(output, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            }
+        } catch (error: Throwable) {
+            runCatching { android.provider.DocumentsContract.deleteDocument(resolver, output) }
+            runCatching { resolver.delete(output, null, null) }
+            throw error
         }
+    }
+    private fun validatePdf(file: File) {
+        check(file.isFile && file.length() > 5L) { "PDF creation produced an empty file" }
+        FileInputStream(file).use { input ->
+            val header = ByteArray(5)
+            check(input.read(header) == 5 && String(header, Charsets.US_ASCII) == "%PDF-") { "Invalid PDF output" }
+        }
+        PDDocument.load(file).use { check(it.numberOfPages > 0) { "PDF has no pages" } }
     }
     private fun plain(html: String) = HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
     private fun validate(s: PdfSpec) { when (s.mode) {

@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -125,6 +126,7 @@ private fun AppRoot(
     var draftTitle by rememberSaveable { mutableStateOf("") }
     var draftHtml by rememberSaveable { mutableStateOf("") }
     var draftImages by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var createSession by rememberSaveable { mutableStateOf(0) }
 
     LaunchedEffect(Unit) { viewModel.loadRecent() }
     LaunchedEffect(incomingPdf) {
@@ -180,17 +182,22 @@ private fun AppRoot(
     when (screen) {
         SCREEN_CREATE -> {
             BackHandler { screen = SCREEN_LIBRARY; createMode = null }
-            CreatePdfScreen(
+            key(createSession) { CreatePdfScreen(
                 onBack = { screen = SCREEN_LIBRARY; createMode = null },
                 onCreated = { uri ->
                     viewModel.openDocument(uri)
                     selectedUri = uri.toString()
                     createMode = null
+                    draftMode = null
+                    draftTitle = ""
+                    draftHtml = ""
+                    draftImages = arrayListOf()
+                    createSession++
                     screen = SCREEN_READER
                 },
                 initialMode = createMode?.let { runCatching { CreatePdfMode.valueOf(it) }.getOrNull() },
                 initialDraft = draftMode?.let { PdfDraft(CreatePdfMode.valueOf(it),draftTitle,draftHtml,draftImages) },
-            )
+            ) }
         }
         SCREEN_FOLDER -> {
             val tree = folderUri
@@ -214,7 +221,7 @@ private fun AppRoot(
                 dataRepository = dataRepository,
                 prefs = prefs,
                 onBack = { screen = SCREEN_LIBRARY; selectedUri = null },
-                onEdit = { appScope.launch { val d=runCatching{CreatePdfRepository(appContext).readDraft(Uri.parse(current))}.getOrNull();if(d!=null){draftMode=d.mode.name;draftTitle=d.title;draftHtml=d.bodyHtml;draftImages=ArrayList(d.images);createMode=d.mode.name;screen=SCREEN_CREATE}else screen=SCREEN_TOOLS } },
+                onEdit = { appScope.launch { val d=runCatching{CreatePdfRepository(appContext).readDraft(Uri.parse(current))}.getOrNull();if(d!=null){draftMode=d.mode.name;draftTitle=d.title;draftHtml=d.bodyHtml;draftImages=ArrayList(d.images);createMode=d.mode.name;createSession++;screen=SCREEN_CREATE}else screen=SCREEN_TOOLS } },
             )
         }
         else -> LibraryScreen(
@@ -224,7 +231,7 @@ private fun AppRoot(
             onOpenPdf = { pdfLauncher.launch(arrayOf("application/pdf")) },
             onOpenFolder = { folderLauncher.launch(null) },
             onScanDevice = { requestDeviceScan() },
-            onCreatePdf = { mode -> createMode = mode?.name; screen = SCREEN_CREATE },
+            onCreatePdf = { mode -> draftMode=null;draftTitle="";draftHtml="";draftImages=arrayListOf();createMode=mode?.name;createSession++;screen=SCREEN_CREATE },
             onThemeChange = onThemeChange,
             onSortChange = viewModel::setSort,
             onOpenDocument = { document ->

@@ -32,6 +32,7 @@ data class PdfReaderUiState(
     val defaultAspectRatio: Float = 1.414f,
     val pageLinks: Map<Int, List<PdfPageLink>> = emptyMap(),
     val pageTexts: List<PdfPageText> = emptyList(),
+    val textRuns: List<PdfTextRun> = emptyList(),
     val requiresPassword:Boolean=false,
     val errorMessage: String? = null,
 )
@@ -113,7 +114,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                     width,
                     currentGeneration,
                 )
-                runCatching { repository.text(uri) }.onSuccess { text -> if(currentGeneration==generation)_uiState.update{it.copy(pageTexts=text)} }
+                runCatching { repository.text(uri) }.onSuccess { (text, runs) -> if(currentGeneration==generation)_uiState.update{it.copy(pageTexts=text,textRuns=runs)} }
                 runCatching { repository.links(uri) }.onSuccess { links ->
                     if (currentGeneration == generation) _uiState.update { state -> state.copy(pageLinks = links) }
                 }

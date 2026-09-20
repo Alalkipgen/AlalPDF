@@ -49,6 +49,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
@@ -84,6 +85,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -98,6 +100,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -399,6 +402,8 @@ fun PdfReaderScreen(
                             ) {
                                 if (bitmap != null) {
                                     BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(pageRatio)) {
+                                        val renderedPageWidth = maxWidth
+                                        val renderedPageHeight = maxHeight
                                         Image(
                                             bitmap = bitmap.asImageBitmap(),
                                             contentDescription = "Page " + (index + 1),
@@ -411,6 +416,22 @@ fun PdfReaderScreen(
                                                 .width(maxWidth * (link.right - link.left))
                                                 .height(maxHeight * (link.bottom - link.top))
                                                 .clickable(role = Role.Button, onClick = { context.openWebLink(link.url) }))
+                                        }
+                                        val textRuns = state.textRuns.filter { it.page == index }
+                                        if (textRuns.isNotEmpty()) SelectionContainer {
+                                            Box(Modifier.fillMaxSize()) {
+                                                textRuns.forEach { run ->
+                                                    Text(
+                                                        run.text,
+                                                        color = Color.Transparent,
+                                                        fontSize = 10.sp,
+                                                        modifier = Modifier
+                                                            .offset(renderedPageWidth * run.left, renderedPageHeight * run.top)
+                                                            .width((renderedPageWidth * (run.right - run.left)).coerceAtLeast(24.dp))
+                                                            .height((renderedPageHeight * (run.bottom - run.top)).coerceAtLeast(18.dp)),
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 } else {
@@ -463,6 +484,7 @@ fun PdfReaderScreen(
                             }
                         },
                         actions = {
+                            IconButton(onClick = onEditPdf) { Icon(Icons.Default.Edit, "Edit PDF") }
                             IconButton(
                                 onClick = {
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
