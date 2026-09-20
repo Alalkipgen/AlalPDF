@@ -13,7 +13,7 @@ Untracked schema backup: `/data/alalpdf-backups/app-schemas-pre-v0.2.2.tgz`
 
 ## Checklist
 - [x] Fix Create Text PDF scroll lag/flash — compileDebugKotlin passed
-- [ ] Fix duplicate hyperlink annotations
+- [x] Fix duplicate hyperlink annotations — unit tests and compile passed
 - [ ] Rewrite drag-selection hit testing and gesture updates
 - [ ] Run debug build, unit tests, lintRelease, release build
 - [ ] Push branch and open PR
