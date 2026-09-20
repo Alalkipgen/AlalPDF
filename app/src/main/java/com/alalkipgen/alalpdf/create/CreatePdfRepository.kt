@@ -96,8 +96,20 @@ class CreatePdfRepository(private val context: Context) {
         CreatePdfMode.IMAGE_TEXT -> require(s.title.isNotBlank() || plain(s.bodyHtml).isNotBlank() || s.images.isNotEmpty()) { "Write something or add an image" }
         CreatePdfMode.SCAN -> require(s.scans.isNotEmpty()) { "Capture a page first" }
     } }
+    /**
+     * Plain text of every page we write, keyed by page index.
+     *
+     * Android shapes Myanmar correctly when it draws the page, but it can only
+     * describe each shaped glyph with a single code point in the PDF's
+     * ToUnicode table. Reading that back turns a Burmese syllable into loose,
+     * reordered pieces. Keeping the real text next to the document is exact
+     * and costs nothing, so the reader uses it instead of extraction.
+     */
+    private val pageTexts = mutableMapOf<Int, String>()
+
     private fun build(doc: PdfDocument, s: PdfSpec): List<PdfLink> {
         val links = mutableListOf<PdfLink>(); var page = 1
+        pageTexts.clear()
         if (s.mode == CreatePdfMode.TEXT || s.mode == CreatePdfMode.IMAGE_TEXT) page = addText(doc, s.title, s.bodyHtml, page, links)
         if (s.mode == CreatePdfMode.IMAGES || s.mode == CreatePdfMode.IMAGE_TEXT) s.images.forEach { decode(it)?.let { b -> addImage(doc, b, page++); b.recycle() } }
         if (s.mode == CreatePdfMode.SCAN) s.scans.forEach { BitmapFactory.decodeFile(it.path)?.let { b -> addImage(doc, b, page++); b.recycle() } }
@@ -153,7 +165,10 @@ class CreatePdfRepository(private val context: Context) {
             }
             page.canvas.save(); page.canvas.clipRect(margin, top, pageWidth - margin, pageHeight - margin)
             page.canvas.translate(margin, top - layout.getLineTop(start)); layout.draw(page.canvas); page.canvas.restore()
-            collectLinks(styled, layout, start, line, top, pageNumber - 1, links); doc.finishPage(page)
+            collectLinks(styled, layout, start, line, top, pageNumber - 1, links)
+            val body = styled.subSequence(layout.getLineStart(start), layout.getLineEnd(line - 1)).toString()
+            pageTexts[pageNumber - 1] = if (hasTitle) (title + "\n\n" + body).trim() else body.trim()
+            doc.finishPage(page)
         } while (line < layout.lineCount)
         return number
     }
@@ -187,7 +202,9 @@ class CreatePdfRepository(private val context: Context) {
                 doc.getPage(item.page).annotations.add(link)
             }
             fun encode(v:String)=Base64.encodeToString(v.toByteArray(Charsets.UTF_8),Base64.NO_WRAP)
-            doc.documentInformation.apply { setCustomMetadataValue("AlalPDF-Version","1");setCustomMetadataValue("AlalPDF-Mode",spec.mode.name);setCustomMetadataValue("AlalPDF-Title",encode(spec.title));setCustomMetadataValue("AlalPDF-Body",encode(spec.bodyHtml));setCustomMetadataValue("AlalPDF-Images",encode(spec.images.joinToString("\n"))) }
+            doc.documentInformation.apply { setCustomMetadataValue("AlalPDF-Version","1");setCustomMetadataValue("AlalPDF-Mode",spec.mode.name);setCustomMetadataValue("AlalPDF-Title",encode(spec.title));setCustomMetadataValue("AlalPDF-Body",encode(spec.bodyHtml));setCustomMetadataValue("AlalPDF-Images",encode(spec.images.joinToString("\n")))
+                setCustomMetadataValue("AlalPDF-PageCount", pageTexts.size.toString())
+                pageTexts.forEach { (index, text) -> setCustomMetadataValue("AlalPDF-Page-" + index, encode(text)) } }
             doc.save(temp)
         }
         check(file.delete() && temp.renameTo(file)) { "Unable to finalize PDF links" }

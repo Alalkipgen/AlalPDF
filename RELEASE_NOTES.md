@@ -1,3 +1,47 @@
+# Alal PDF v0.2.1-beta
+
+## Fixes in this release
+
+- Burmese text copied or searched from a PDF that Alal PDF created is now
+  exact. Android shapes Myanmar correctly when it draws a page, but it can only
+  map one glyph to one code point afterwards, so reading that text back lost
+  medials and reordered syllables. The real text is now stored with the
+  document and used directly. PDFs made by other apps with a broken ToUnicode
+  table still cannot be read back correctly; that needs OCR.
+- Text selection is smooth. Hit testing is a binary search over a prebuilt line
+  index and grapheme boundaries are precomputed, instead of scanning every
+  character and rebuilding a break iterator on every drag event. Handles now
+  track the finger from wherever they were grabbed.
+- Links work again, and a single tap toggles the top bar again: the selection
+  overlay used to swallow every tap and now forwards them when nothing is
+  selected.
+- Pages no longer jump when the top bar appears or disappears; the space it
+  needs is always reserved and only the bar itself fades.
+- Create Text PDF: the title scrolls away with the text and comes back at the
+  top, and the body can no longer draw over it.
+
+# Alal PDF v0.2.1-beta
+
+## Fixes in this release
+
+- Burmese text copied or searched from a PDF that Alal PDF created is now
+  exact. Android shapes Myanmar correctly when it draws a page, but it can only
+  map one glyph to one code point afterwards, so reading that text back lost
+  medials and reordered syllables. The real text is now stored with the
+  document and used directly. PDFs made by other apps with a broken ToUnicode
+  table still cannot be read back correctly; that needs OCR.
+- Text selection is smooth. Hit testing is a binary search over a prebuilt line
+  index and grapheme boundaries are precomputed, instead of scanning every
+  character and rebuilding a break iterator on every drag event. Handles now
+  track the finger from wherever they were grabbed.
+- Links work again, and a single tap toggles the top bar again: the selection
+  overlay used to swallow every tap and now forwards them when nothing is
+  selected.
+- Pages no longer jump when the top bar appears or disappears; the space it
+  needs is always reserved and only the bar itself fades.
+- Create Text PDF: the title scrolls away with the text and comes back at the
+  top, and the body can no longer draw over it.
+
 # Alal PDF v0.2.0-beta
 
 ## Myanmar text

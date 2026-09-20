@@ -23,6 +23,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -92,6 +95,15 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
     // Like a notes app: the bar slides away while writing downwards and comes
     // back as soon as the page is scrolled up again.
     val topBarScroll = TopAppBarDefaults.enterAlwaysScrollBehavior(rememberTopAppBarState())
+    // How far the editor itself is scrolled. The NestedScrollView keeps the
+    // scroll to itself, so the collapsing bar and the title are driven from
+    // this value instead of from a Compose nested-scroll connection.
+    val density = LocalDensity.current
+    var editorScroll by remember { mutableIntStateOf(0) }
+    LaunchedEffect(editorScroll) {
+        val limit = topBarScroll.state.heightOffsetLimit
+        topBarScroll.state.heightOffset = maxOf(limit, -editorScroll.toFloat())
+    }
     Scaffold(
         modifier = Modifier.nestedScroll(topBarScroll.nestedScrollConnection),
         topBar = {
@@ -115,9 +127,23 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                 Box(Modifier.fillMaxWidth().weight(1f).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 10.dp, vertical = 8.dp), contentAlignment = Alignment.TopCenter) {
                     Surface(Modifier.fillMaxHeight().fillMaxWidth().widthIn(max = 840.dp), shape = RoundedCornerShape(8.dp), shadowElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
                         Column(Modifier.fillMaxSize()) {
-                            androidx.compose.foundation.text.BasicTextField(value=title,onValueChange={title=it.replace("\n","").take(120);previewPath=null},singleLine=true,textStyle=MaterialTheme.typography.headlineSmall.copy(color=MaterialTheme.colorScheme.onSurface),decorationBox={field->Box(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=16.dp)){if(title.isBlank())Text("Title",style=MaterialTheme.typography.headlineSmall,color=MaterialTheme.colorScheme.onSurfaceVariant);field()}},modifier=Modifier.fillMaxWidth())
-                            HorizontalDivider(Modifier.padding(horizontal=20.dp))
-                            RichTextEditor(html,{html=it;previewPath=null},editor,Modifier.fillMaxSize(),::linkDialog)
+                            // The title scrolls away with the text, like a
+                            // notes app, and is clipped so the body can never
+                            // draw over it.
+                            var titleHeight by remember { mutableIntStateOf(0) }
+                            val collapsed = with(density) {
+                                (titleHeight - editorScroll).coerceIn(0, titleHeight).toDp()
+                            }
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(collapsed)
+                                    .clipToBounds(),
+                            ) {
+                                androidx.compose.foundation.text.BasicTextField(value=title,onValueChange={title=it.replace("\n","").take(120);previewPath=null},singleLine=true,textStyle=MaterialTheme.typography.headlineSmall.copy(color=MaterialTheme.colorScheme.onSurface),decorationBox={field->Box(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=16.dp)){if(title.isBlank())Text("Title",style=MaterialTheme.typography.headlineSmall,color=MaterialTheme.colorScheme.onSurfaceVariant);field()}},modifier=Modifier.fillMaxWidth().onSizeChanged { if (it.height > titleHeight) titleHeight = it.height })
+                            }
+                            if (collapsed > 0.dp) HorizontalDivider(Modifier.padding(horizontal=20.dp))
+                            RichTextEditor(html,{html=it;previewPath=null},editor,Modifier.fillMaxSize(),::linkDialog) { editorScroll = it }
                         }
                     }
                 }

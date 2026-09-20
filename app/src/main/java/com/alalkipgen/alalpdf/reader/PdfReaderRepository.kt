@@ -88,7 +88,19 @@ class PdfReaderRepository(private val context: Context) {
      * Text for a single page. Prefers the platform renderer when it can supply
      * positioned runs, otherwise falls back to the lazy PDFBox index.
      */
+    /** Plain text stored by Alal PDF itself, which is always exact. */
+    private val storedText = mutableMapOf<Uri, Map<Int, String>>()
+
+    private fun storedPageText(uri: Uri, page: Int): String? {
+        val cached = storedText[uri]
+        if (cached != null) return cached[page]
+        val loaded = runCatching { AlalPdfText.read(context, uri) }.getOrDefault(emptyMap())
+        storedText[uri] = loaded
+        return loaded[page]
+    }
+
     suspend fun pageText(uri: Uri, page: Int): String = withContext(Dispatchers.IO) {
+        storedPageText(uri, page)?.takeIf { it.isNotBlank() }?.let { return@withContext it }
         val pdfiumText = runCatching {
             synchronized(pdfiumLock) { pdfiumSource(uri)?.pageText(page).orEmpty() }
         }.getOrDefault("")
