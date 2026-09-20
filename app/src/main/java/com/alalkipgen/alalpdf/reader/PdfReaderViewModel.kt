@@ -24,6 +24,27 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 
+/**
+ * Lifecycle of the document's text layer.
+ *
+ * Previously every failure collapsed into "pageTexts is empty", which the UI
+ * reported as "No selectable text" regardless of the real cause. Keeping the
+ * cause makes both the copy dialog and the search dialog honest.
+ */
+enum class PdfTextLoadState {
+    /** Extraction has not finished yet. */
+    Loading,
+
+    /** At least one page produced text. */
+    Ready,
+
+    /** Extraction succeeded but the document has no embedded text (scanned images). */
+    ImageOnly,
+
+    /** Extraction threw. See [PdfReaderUiState.textError]. */
+    Failed,
+}
+
 data class PdfReaderUiState(
     val isLoading: Boolean = true,
     val pageCount: Int = 0,
@@ -33,6 +54,8 @@ data class PdfReaderUiState(
     val pageLinks: Map<Int, List<PdfPageLink>> = emptyMap(),
     val pageTexts: List<PdfPageText> = emptyList(),
     val textRuns: List<PdfTextRun> = emptyList(),
+    val textState: PdfTextLoadState = PdfTextLoadState.Loading,
+    val textError: String? = null,
     val requiresPassword:Boolean=false,
     val errorMessage: String? = null,
 )
@@ -114,7 +137,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                     width,
                     currentGeneration,
                 )
-                runCatching { repository.text(uri) }.onSuccess { (text, runs) -> if(currentGeneration==generation)_uiState.update{it.copy(pageTexts=text,textRuns=runs)} }
+                loadText(uri, currentGeneration)
                 runCatching { repository.links(uri) }.onSuccess { links ->
                     if (currentGeneration == generation) _uiState.update { state -> state.copy(pageLinks = links) }
                 }
@@ -125,6 +148,47 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 }
             }
         }
+    }
+
+    /**
+     * Extracts the document's text layer.
+     *
+     * The failure branch is the important part: extraction for a large document
+     * can throw [OutOfMemoryError] inside PDFBox, and previously that error was
+     * discarded silently.
+     */
+    private suspend fun loadText(uri: Uri, expectedGeneration: Int) {
+        runCatching { repository.text(uri) }
+            .onSuccess { (texts, runs) ->
+                if (expectedGeneration != generation) return@onSuccess
+                val hasText = texts.any { page -> page.text.isNotBlank() }
+                _uiState.update { state ->
+                    state.copy(
+                        pageTexts = texts,
+                        textRuns = runs,
+                        textState = if (hasText) PdfTextLoadState.Ready else PdfTextLoadState.ImageOnly,
+                        textError = null,
+                    )
+                }
+            }
+            .onFailure { error ->
+                if (error is CancellationException) throw error
+                if (expectedGeneration != generation) return@onFailure
+                _uiState.update { state ->
+                    state.copy(
+                        pageTexts = emptyList(),
+                        textRuns = emptyList(),
+                        textState = PdfTextLoadState.Failed,
+                        textError = error.describeForUser(),
+                    )
+                }
+            }
+    }
+
+    private fun Throwable.describeForUser(): String = when (this) {
+        is OutOfMemoryError ->
+            "Ran out of memory while reading this document's text layer."
+        else -> message?.takeIf(String::isNotBlank) ?: (this::class.java.simpleName)
     }
 
     fun renderWindow(uri: Uri, pageIndex: Int, width: Int, nightMode: Boolean = false) {
