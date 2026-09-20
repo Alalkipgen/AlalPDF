@@ -14,7 +14,7 @@ Untracked schema backup: `/data/alalpdf-backups/app-schemas-pre-v0.2.2.tgz`
 ## Checklist
 - [x] Fix Create Text PDF scroll lag/flash — compileDebugKotlin passed
 - [x] Fix duplicate hyperlink annotations — unit tests and compile passed
-- [ ] Rewrite drag-selection hit testing and gesture updates
+- [x] Rewrite drag-selection hit testing and gesture updates — index tests and compile passed
 - [ ] Run debug build, unit tests, lintRelease, release build
 - [ ] Push branch and open PR
 - [ ] Poll CI every 60 seconds; inspect logs immediately on failure

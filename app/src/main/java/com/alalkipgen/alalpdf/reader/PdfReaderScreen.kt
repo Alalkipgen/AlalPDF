@@ -460,7 +460,10 @@ fun PdfReaderScreen(
                                             onEdgeDrag = { delta ->
                                                 // Dragging a handle past the edge
                                                 // scrolls the page, like Drive.
-                                                scope.launch { listState.scrollBy(delta * 0.35f) }
+                                                // Do not launch one coroutine per
+                                                // pointer event; that queued work
+                                                // made the handle lag behind.
+                                                listState.dispatchRawDelta(delta * 0.35f)
                                             },
                                         )
                                     }
