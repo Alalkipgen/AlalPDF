@@ -124,6 +124,7 @@ fun PdfReaderScreen(
     onAddBookmark: () -> Unit,
     onPageSelected: (Int) -> Unit,
     onRender: (Int) -> Unit,
+    onPromotePage: (Int) -> Unit = {},
     onRequestPageText: (Int) -> Unit = {},
     onRequestPageLinks: (Int) -> Unit = {},
     onSearch: (String) -> Unit = {},
@@ -204,6 +205,7 @@ fun PdfReaderScreen(
         }.distinctUntilChanged().collectLatest { (scrolling, page) ->
             if (!scrolling && state.pageCount > 0) {
                 delay(SETTLED_EXTRACTION_DELAY_MS)
+                onPromotePage(page)
                 onRequestPageText(page)
                 onRequestPageLinks(page)
             }

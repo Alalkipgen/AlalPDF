@@ -14,6 +14,9 @@ class PdfReaderRepository(private val context: Context) {
 
     private var thumbnails: ThumbnailCache? = null
     private var thumbnailsUri: Uri? = null
+    private val metadataLock = Any()
+    private var metadataUri: Uri? = null
+    private var metadata = AlalPdfStoredContent()
 
     suspend fun pageCount(uri: Uri, password: String? = null): Int = withContext(Dispatchers.IO) {
         readerSession(uri, password).pageCount
@@ -37,6 +40,17 @@ class PdfReaderRepository(private val context: Context) {
         }
 
     suspend fun pageLinks(uri: Uri, page: Int): List<PdfPageLink> = withContext(Dispatchers.IO) {
+        val stored = storedContent(uri)
+        stored.pageLinks[page]?.takeIf(List<PdfPageLink>::isNotEmpty)?.let {
+            return@withContext it
+        }
+        // PdfiumAndroid 1.0.32 has a known getPageLinks rectangle-size bug.
+        // Use a short-lived PDFBox pass for exact annotations, then PDFium only
+        // as a final fallback.
+        val compatibilityLinks = runCatching {
+            PdfLinkExtractor.extractPage(resolver, uri, page, readerSession(uri).password)
+        }.getOrDefault(emptyList())
+        if (compatibilityLinks.isNotEmpty()) return@withContext compatibilityLinks
         runCatching { readerSession(uri).pageLinks(page) }.getOrDefault(emptyList())
     }
 
@@ -64,15 +78,16 @@ class PdfReaderRepository(private val context: Context) {
      * positioned runs, otherwise falls back to the lazy PDFBox index.
      */
     /** Plain text stored by Alal PDF itself, which is always exact. */
-    private var storedTextUri: Uri? = null
-    private var storedText: Map<Int, String> = emptyMap()
-
     private fun storedPageText(uri: Uri, page: Int): String? {
-        if (storedTextUri != uri) {
-            storedText = runCatching { AlalPdfText.read(context, uri) }.getOrDefault(emptyMap())
-            storedTextUri = uri
+        return storedContent(uri).pageTexts[page]
+    }
+
+    private fun storedContent(uri: Uri): AlalPdfStoredContent = synchronized(metadataLock) {
+        if (metadataUri != uri) {
+            metadata = AlalPdfText.readContent(context, uri)
+            metadataUri = uri
         }
-        return storedText[page]
+        metadata
     }
 
     suspend fun pageText(uri: Uri, page: Int): String = withContext(Dispatchers.IO) {
@@ -106,8 +121,10 @@ class PdfReaderRepository(private val context: Context) {
             runCatching { session?.close() }
             session = null
         }
-        storedText = emptyMap()
-        storedTextUri = null
+        synchronized(metadataLock) {
+            metadata = AlalPdfStoredContent()
+            metadataUri = null
+        }
         thumbnails?.clearMemory()
         thumbnails = null
         thumbnailsUri = null
