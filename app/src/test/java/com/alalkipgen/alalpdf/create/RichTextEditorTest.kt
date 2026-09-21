@@ -14,4 +14,16 @@ class RichTextEditorTest {
     fun addsHttpsToBareDomains() {
         assertEquals("https://example.com", normalizeHttpUrl("example.com"))
     }
+
+    @Test
+    fun trimsParagraphBreaksFromPdfLinkAnnotations() {
+        val text = "Open website \n\nNext page"
+        assertEquals("Open website".length, trimLinkEnd(text, 0, "Open website \n".length))
+    }
+
+    @Test
+    fun doesNotTrimCharactersInsideTheLink() {
+        val text = "Open website"
+        assertEquals(text.length, trimLinkEnd(text, 0, text.length))
+    }
 }

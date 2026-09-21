@@ -173,14 +173,30 @@ class CreatePdfRepository(private val context: Context) {
         return number
     }
     private fun collectLinks(text: android.text.Spanned, layout: StaticLayout, firstLine: Int, endLine: Int, top: Float, page: Int, out: MutableList<PdfLink>) {
+        if (firstLine >= endLine) return
+        val pageStart = layout.getLineStart(firstLine)
+        val pageEnd = layout.getLineEnd(endLine - 1)
         text.getSpans(0, text.length, URLSpan::class.java).forEach { span ->
-            val start = text.getSpanStart(span); val end = text.getSpanEnd(span)
-            val from = maxOf(firstLine, layout.getLineForOffset(start)); val to = minOf(endLine - 1, layout.getLineForOffset((end - 1).coerceAtLeast(start)))
+            val start = text.getSpanStart(span).coerceAtLeast(0)
+            // HTML frequently leaves the paragraph newline inside URLSpan.
+            // If that newline is the first character of the next PDF page it
+            // used to create a second, phantom annotation on that page.
+            val end = trimLinkEnd(text, start, text.getSpanEnd(span))
+            val visibleStart = maxOf(start, pageStart)
+            val visibleEnd = minOf(end, pageEnd)
+            if (visibleStart >= visibleEnd) return@forEach
+            val from = maxOf(firstLine, layout.getLineForOffset(visibleStart))
+            val to = minOf(endLine - 1, layout.getLineForOffset(visibleEnd - 1))
             if (from <= to) for (line in from..to) {
-                val a = maxOf(start, layout.getLineStart(line)); val b = minOf(end, layout.getLineEnd(line))
+                var a = maxOf(visibleStart, layout.getLineStart(line))
+                var b = minOf(visibleEnd, layout.getLineEnd(line))
+                while (a < b && text[a].isWhitespace()) a++
+                while (b > a && text[b - 1].isWhitespace()) b--
+                if (a >= b) continue
                 val x1 = margin + layout.getPrimaryHorizontal(a); val x2 = margin + layout.getPrimaryHorizontal(b)
                 val y1 = top + layout.getLineTop(line) - layout.getLineTop(firstLine); val y2 = top + layout.getLineBottom(line) - layout.getLineTop(firstLine)
-                out += PdfLink(page, minOf(x1, x2), y1, maxOf(x1, x2), y2, normalizeHttpUrl(span.url))
+                val item = PdfLink(page, minOf(x1, x2), y1, maxOf(x1, x2), y2, normalizeHttpUrl(span.url))
+                if (item.right > item.left && item.bottom > item.top && item !in out) out += item
             }
         }
     }
@@ -196,10 +212,12 @@ class CreatePdfRepository(private val context: Context) {
     private fun finalizePdf(file: File, links: List<PdfLink>, spec: PdfSpec) {
         PDFBoxResourceLoader.init(context); val temp = File(file.parentFile, file.nameWithoutExtension + "-links.pdf")
         PDDocument.load(file).use { doc ->
-            links.forEach { item ->
+            links.distinct().forEach { item ->
+                val targetPage = doc.getPage(item.page)
                 val link = PDAnnotationLink(); link.action = PDActionURI().apply { uri = item.url }
                 link.rectangle = PDRectangle(item.left, pageHeight - item.bottom, item.right - item.left, item.bottom - item.top)
-                doc.getPage(item.page).annotations.add(link)
+                link.page = targetPage
+                targetPage.annotations.add(link)
             }
             fun encode(v:String)=Base64.encodeToString(v.toByteArray(Charsets.UTF_8),Base64.NO_WRAP)
             doc.documentInformation.apply { setCustomMetadataValue("AlalPDF-Version","1");setCustomMetadataValue("AlalPDF-Mode",spec.mode.name);setCustomMetadataValue("AlalPDF-Title",encode(spec.title));setCustomMetadataValue("AlalPDF-Body",encode(spec.bodyHtml));setCustomMetadataValue("AlalPDF-Images",encode(spec.images.joinToString("\n")))
@@ -222,4 +240,10 @@ class CreatePdfRepository(private val context: Context) {
         const val TITLE_MAX_LINES = 3
         const val TITLE_GAP = 16f
     }
+}
+
+internal fun trimLinkEnd(text: CharSequence, start: Int, rawEnd: Int): Int {
+    var end = rawEnd.coerceIn(start, text.length)
+    while (end > start && text[end - 1].isWhitespace()) end--
+    return end
 }

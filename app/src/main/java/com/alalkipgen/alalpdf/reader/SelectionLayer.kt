@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -30,6 +31,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -84,11 +88,11 @@ fun SelectionLayer(
     // Everything expensive is computed once per page. The first version did a
     // linear scan over every character and built a BreakIterator on every drag
     // event, which is what made dragging feel like it was stuttering.
-    val lines = remember(runs) { buildLines(runs) }
+    val selectionIndex = remember(runs) { SelectionIndex(runs) }
     val clusterStarts = remember(runs, pageText) { clusterStarts(pageText, charMode) }
 
-    var anchor by remember(runs) { mutableStateOf(-1) }
-    var focus by remember(runs) { mutableStateOf(-1) }
+    var anchor by remember(runs) { mutableIntStateOf(-1) }
+    var focus by remember(runs) { mutableIntStateOf(-1) }
     var dragging by remember(runs) { mutableStateOf(DragTarget.NONE) }
     val active = anchor >= 0 && focus >= 0
     val first = if (active) min(anchor, focus) else -1
@@ -101,49 +105,10 @@ fun SelectionLayer(
         val viewHeight = maxHeight
 
         fun indexAt(position: Offset): Int {
-            val x = position.x / boxWidth
-            val y = position.y / boxHeight
-            if (lines.isEmpty()) return -1
-            // Pick the closest line first, then the closest character inside
-            // it. Both steps are binary searches, so dragging stays smooth on
-            // pages with thousands of characters.
-            var lineIndex = lines.binarySearch { line ->
-                when {
-                    y < line.top -> 1
-                    y > line.bottom -> -1
-                    else -> 0
-                }
-            }
-            if (lineIndex < 0) {
-                val insertion = -lineIndex - 1
-                val before = (insertion - 1).coerceAtLeast(0)
-                val after = insertion.coerceAtMost(lines.lastIndex)
-                lineIndex = if (kotlin.math.abs(y - lines[before].bottom) <=
-                    kotlin.math.abs(lines[after].top - y)
-                ) {
-                    before
-                } else {
-                    after
-                }
-            }
-            val line = lines[lineIndex]
-            var best = line.firstIndex
-            var bestDistance = Float.MAX_VALUE
-            for (index in line.firstIndex..line.lastIndex) {
-                val run = runs[index]
-                if (run.right <= run.left) continue
-                val distance = when {
-                    x < run.left -> run.left - x
-                    x > run.right -> x - run.right
-                    else -> 0f
-                }
-                if (distance < bestDistance) {
-                    bestDistance = distance
-                    best = index
-                    if (distance == 0f) break
-                }
-            }
-            return best
+            return selectionIndex.hit(
+                x = (position.x / boxWidth).coerceIn(0f, 1f),
+                y = (position.y / boxHeight).coerceIn(0f, 1f),
+            )
         }
 
         /** Keeps a Myanmar syllable or an emoji in one piece while dragging. */
@@ -270,7 +235,10 @@ fun SelectionLayer(
                 onDrag = { pagePosition ->
                     dragging = DragTarget.START
                     val index = indexAt(pagePosition)
-                    if (index >= 0) anchor = snapToCluster(index, false).coerceAtMost(last)
+                    if (index >= 0) {
+                        val snapped = snapToCluster(index, false).coerceAtMost(last)
+                        if (anchor <= focus) anchor = snapped else focus = snapped
+                    }
                     autoScroll(pagePosition)
                 },
                 onDragEnd = { dragging = DragTarget.NONE },
@@ -282,7 +250,10 @@ fun SelectionLayer(
                 onDrag = { pagePosition ->
                     dragging = DragTarget.END
                     val index = indexAt(pagePosition)
-                    if (index >= 0) focus = snapToCluster(index, true).coerceAtLeast(first)
+                    if (index >= 0) {
+                        val snapped = snapToCluster(index, true).coerceAtLeast(first)
+                        if (anchor >= focus) anchor = snapped else focus = snapped
+                    }
                     autoScroll(pagePosition)
                 },
                 onDragEnd = { dragging = DragTarget.NONE },
@@ -344,24 +315,32 @@ private fun SelectionHandle(
 ) {
     val originX = (if (leading) x - HANDLE_TOUCH else x).coerceAtLeast(0.dp)
     val originY = (y - HANDLE_TOUCH / 4f).coerceAtLeast(0.dp)
+    // LayoutCoordinates are kept in a plain holder, not Compose state. Pointer
+    // moves can then be mapped directly into the page coordinate system
+    // without recomposing or accumulating floating-point drag deltas.
+    val coordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
     Box(
         Modifier
             .offset(x = originX, y = originY)
             .size(HANDLE_TOUCH)
+            .onGloballyPositioned { coordinates[0] = it }
             .pointerInput(leading) {
-                // The finger grabs the handle somewhere, and the selection has
-                // to follow the tip of the handle from there on, otherwise the
-                // text jumps as soon as the drag starts.
-                var pointer = Offset.Zero
+                var grabOffset = Offset.Zero
                 detectDragGestures(
                     onDragStart = { start ->
-                        pointer = Offset(originX.toPx(), originY.toPx()) + start
+                        val radius = minOf(size.width, size.height) / 4f
+                        val tip = if (leading) {
+                            Offset(size.width - radius, radius * 1.2f)
+                        } else {
+                            Offset(radius, radius * 1.2f)
+                        }
+                        grabOffset = start - tip
                     },
-                    onDrag = { change, amount ->
+                    onDrag = { change, _ ->
                         change.consume()
-                        pointer += amount
-                        val tipX = if (leading) pointer.x + size.width / 2f else pointer.x - size.width / 2f
-                        onDrag(Offset(tipX, pointer.y - size.height / 4f))
+                        val parentPosition =
+                            coordinates[0]?.positionInParent()?.plus(change.position) ?: return@detectDragGestures
+                        onDrag(parentPosition - grabOffset)
                     },
                     onDragEnd = onDragEnd,
                     onDragCancel = onDragEnd,
@@ -380,37 +359,102 @@ private fun SelectionHandle(
     }
 }
 
-/** A row of characters that share a baseline, kept sorted for binary search. */
-private class TextLine(val top: Float, val bottom: Float, val firstIndex: Int, val lastIndex: Int)
+/**
+ * Immutable spatial index used by drag selection.
+ *
+ * Both the line lookup and the character lookup use binary search. The old
+ * implementation still scanned every glyph in the chosen line for every
+ * pointer event, despite its comment claiming otherwise.
+ */
+internal class SelectionIndex(private val runs: List<PdfTextRun>) {
+    private class TextLine(
+        val top: Float,
+        val bottom: Float,
+        val runIndices: IntArray,
+        val centers: FloatArray,
+    )
 
-private fun buildLines(runs: List<PdfTextRun>): List<TextLine> {
-    val lines = ArrayList<TextLine>()
-    var first = -1
-    var top = 0f
-    var bottom = 0f
-    runs.forEachIndexed { index, run ->
-        if (run.right <= run.left && run.bottom <= run.top) return@forEachIndexed
-        if (first < 0) {
-            first = index
-            top = run.top
-            bottom = run.bottom
-            return@forEachIndexed
+    private val lines: List<TextLine> = buildSpatialLines(runs)
+
+    fun hit(x: Float, y: Float): Int {
+        if (lines.isEmpty()) return -1
+        var low = 0
+        var high = lines.lastIndex
+        var exact = -1
+        while (low <= high) {
+            val middle = (low + high) ushr 1
+            val line = lines[middle]
+            when {
+                y < line.top -> high = middle - 1
+                y > line.bottom -> low = middle + 1
+                else -> {
+                    exact = middle
+                    break
+                }
+            }
         }
-        val center = (run.top + run.bottom) / 2f
-        val lineCenter = (top + bottom) / 2f
-        val tolerance = maxOf(bottom - top, run.bottom - run.top) * 0.6f
-        if (abs(center - lineCenter) <= maxOf(tolerance, 0.004f)) {
-            top = min(top, run.top)
-            bottom = max(bottom, run.bottom)
+        val lineIndex = if (exact >= 0) {
+            exact
         } else {
-            lines.add(TextLine(top, bottom, first, index - 1))
-            first = index
-            top = run.top
-            bottom = run.bottom
+            val before = high.coerceIn(0, lines.lastIndex)
+            val after = low.coerceIn(0, lines.lastIndex)
+            if (abs(y - lines[before].bottom) <= abs(lines[after].top - y)) before else after
+        }
+        val line = lines[lineIndex]
+        val found = line.centers.binarySearch(x)
+        if (found >= 0) return line.runIndices[found]
+        val insertion = -found - 1
+        if (insertion <= 0) return line.runIndices.first()
+        if (insertion >= line.centers.size) return line.runIndices.last()
+        val before = insertion - 1
+        return if (x - line.centers[before] <= line.centers[insertion] - x) {
+            line.runIndices[before]
+        } else {
+            line.runIndices[insertion]
         }
     }
-    if (first >= 0) lines.add(TextLine(top, bottom, first, runs.lastIndex))
-    return lines.sortedBy { it.top }
+
+    private fun buildSpatialLines(runs: List<PdfTextRun>): List<TextLine> {
+        data class MutableLine(
+            var top: Float,
+            var bottom: Float,
+            val indices: MutableList<Int>,
+        )
+
+        val grouped = ArrayList<MutableLine>()
+        runs.forEachIndexed { index, run ->
+            if (run.right <= run.left || run.bottom <= run.top) return@forEachIndexed
+            val center = (run.top + run.bottom) / 2f
+            val candidate = grouped.lastOrNull()
+            val candidateCenter = candidate?.let { (it.top + it.bottom) / 2f }
+            val tolerance = candidate?.let {
+                maxOf(it.bottom - it.top, run.bottom - run.top) * 0.6f
+            } ?: 0f
+            if (candidate != null && candidateCenter != null &&
+                abs(center - candidateCenter) <= maxOf(tolerance, 0.004f)
+            ) {
+                candidate.top = min(candidate.top, run.top)
+                candidate.bottom = max(candidate.bottom, run.bottom)
+                candidate.indices += index
+            } else {
+                grouped += MutableLine(run.top, run.bottom, mutableListOf(index))
+            }
+        }
+        return grouped.map { line ->
+            val sorted = line.indices.sortedBy { index ->
+                (runs[index].left + runs[index].right) / 2f
+            }
+            TextLine(
+                top = line.top,
+                bottom = line.bottom,
+                runIndices = sorted.toIntArray(),
+                centers = FloatArray(sorted.size) { position ->
+                    val run = runs[sorted[position]]
+                    (run.left + run.right) / 2f
+                },
+            )
+        }.sortedBy { it.top }
+    }
 }
 
 /** Start offsets of every grapheme cluster in the page text. */
