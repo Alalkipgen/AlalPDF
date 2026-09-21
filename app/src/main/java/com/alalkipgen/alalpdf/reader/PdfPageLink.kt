@@ -11,11 +11,23 @@ import kotlin.math.roundToInt
 data class PdfPageLink(val left: Float, val top: Float, val right: Float, val bottom: Float, val url: String)
 
 internal object PdfLinkExtractor {
-    fun extract(resolver: ContentResolver, uri: Uri): Map<Int, List<PdfPageLink>> {
-        val result = mutableMapOf<Int, MutableList<PdfPageLink>>()
+    /**
+     * Opens PDFBox only for the requested page and closes it immediately.
+     * Keeping a second full PDF object model beside PdfRenderer and PDFium was
+     * the reader's largest avoidable memory spike.
+     */
+    fun extractPage(
+        resolver: ContentResolver,
+        uri: Uri,
+        pageIndex: Int,
+        password: String? = null,
+    ): List<PdfPageLink> {
+        if (pageIndex < 0) return emptyList()
+        val result = mutableListOf<PdfPageLink>()
         resolver.openInputStream(uri)?.use { input ->
-            PDDocument.load(input).use { document ->
-                document.pages.forEachIndexed { index, page ->
+            PDDocument.load(input, password.orEmpty()).use { document ->
+                if (pageIndex >= document.numberOfPages) return@use
+                document.getPage(pageIndex).let { page ->
                     val box = page.cropBox ?: page.mediaBox
                     val width = box.width.coerceAtLeast(1f); val height = box.height.coerceAtLeast(1f)
                     page.annotations.filterIsInstance<PDAnnotationLink>().forEach { annotation ->
@@ -27,23 +39,21 @@ internal object PdfLinkExtractor {
                         val y2 = (1f - (rect.lowerLeftY - box.lowerLeftY) / height).coerceIn(0f, 1f)
                         val transformed = rotateRect(x1, y1, x2, y2, page.rotation)
                         if (transformed.right > transformed.left && transformed.bottom > transformed.top)
-                            result.getOrPut(index) { mutableListOf() } += transformed.copy(url = target)
+                            result += transformed.copy(url = target)
                     }
                 }
             }
-        } ?: return emptyMap()
+        } ?: return emptyList()
         // Malformed generators sometimes repeat the same annotation object in
         // a page's Annots array. Never create two hit targets for one rectangle.
-        return result.mapValues { (_, links) ->
-            links.distinctBy { link ->
-                listOf(
-                    link.url,
-                    (link.left * 10_000).roundToInt(),
-                    (link.top * 10_000).roundToInt(),
-                    (link.right * 10_000).roundToInt(),
-                    (link.bottom * 10_000).roundToInt(),
-                )
-            }
+        return result.distinctBy { link ->
+            listOf(
+                link.url,
+                (link.left * 10_000).roundToInt(),
+                (link.top * 10_000).roundToInt(),
+                (link.right * 10_000).roundToInt(),
+                (link.bottom * 10_000).roundToInt(),
+            )
         }
     }
 

@@ -10,11 +10,7 @@ class PdfReaderRepository(private val context: Context) {
     private val resolver = context.contentResolver
 
     private val sessionLock = Any()
-    private val textLock = Any()
     private var session: PdfDocumentSession? = null
-
-    private var textIndex: PdfTextIndex? = null
-    private var textIndexUri: Uri? = null
 
     private var thumbnails: ThumbnailCache? = null
     private var thumbnailsUri: Uri? = null
@@ -40,8 +36,10 @@ class PdfReaderRepository(private val context: Context) {
                 .also { cache.put(page, it) }
         }
 
-    suspend fun links(uri: Uri): Map<Int, List<PdfPageLink>> = withContext(Dispatchers.IO) {
-        runCatching { PdfLinkExtractor.extract(resolver, uri) }.getOrDefault(emptyMap())
+    suspend fun pageLinks(uri: Uri, page: Int): List<PdfPageLink> = withContext(Dispatchers.IO) {
+        runCatching {
+            PdfLinkExtractor.extractPage(resolver, uri, page, readerSession(uri).password)
+        }.getOrDefault(emptyList())
     }
 
     /**
@@ -50,8 +48,8 @@ class PdfReaderRepository(private val context: Context) {
      *
      * The platform renderer only exposes positioned text from API 35, which is
      * why selection never worked on normal devices. PDFBox reports a position
-     * per glyph on every version, so it is used whenever the platform cannot
-     * answer.
+     * per glyph. PDFium is the normal reader text engine; PDFBox is not kept
+     * open beside the renderer.
      */
     suspend fun pageTextRuns(uri: Uri, page: Int): List<PdfTextRun> = withContext(Dispatchers.IO) {
         // PDFium first: it is the only source that gives a box per character,
@@ -60,10 +58,7 @@ class PdfReaderRepository(private val context: Context) {
             readerSession(uri).characterRuns(page)
         }.getOrDefault(emptyList())
         if (charRuns.isNotEmpty()) return@withContext charRuns
-        val platformRuns = runsOrEmpty(uri, page)
-        if (platformRuns.isNotEmpty()) return@withContext platformRuns
-        runCatching { synchronized(textLock) { textIndex(uri).pageRuns(page) } }
-            .getOrDefault(emptyList())
+        runsOrEmpty(uri, page)
     }
 
     /**
@@ -71,14 +66,15 @@ class PdfReaderRepository(private val context: Context) {
      * positioned runs, otherwise falls back to the lazy PDFBox index.
      */
     /** Plain text stored by Alal PDF itself, which is always exact. */
-    private val storedText = mutableMapOf<Uri, Map<Int, String>>()
+    private var storedTextUri: Uri? = null
+    private var storedText: Map<Int, String> = emptyMap()
 
     private fun storedPageText(uri: Uri, page: Int): String? {
-        val cached = storedText[uri]
-        if (cached != null) return cached[page]
-        val loaded = runCatching { AlalPdfText.read(context, uri) }.getOrDefault(emptyMap())
-        storedText[uri] = loaded
-        return loaded[page]
+        if (storedTextUri != uri) {
+            storedText = runCatching { AlalPdfText.read(context, uri) }.getOrDefault(emptyMap())
+            storedTextUri = uri
+        }
+        return storedText[page]
     }
 
     suspend fun pageText(uri: Uri, page: Int): String = withContext(Dispatchers.IO) {
@@ -91,23 +87,12 @@ class PdfReaderRepository(private val context: Context) {
         if (runs.isNotEmpty()) {
             MyanmarText.normalize(runs.joinToString("\n") { it.text }).trim()
         } else {
-            synchronized(textLock) { textIndex(uri).pageText(page) }
+            ""
         }
     }
 
     private fun runsOrEmpty(uri: Uri, page: Int): List<PdfTextRun> =
         runCatching { readerSession(uri).platformTextRuns(page) }.getOrDefault(emptyList())
-
-    private fun textIndex(uri: Uri): PdfTextIndex {
-        textIndex?.takeIf { textIndexUri == uri }?.let { return it }
-        runCatching { textIndex?.close() }
-        textIndex = null
-        textIndexUri = null
-        return PdfTextIndex.open(context, uri, readerSession(uri).password).also {
-            textIndex = it
-            textIndexUri = uri
-        }
-    }
 
     private fun thumbnailCache(uri: Uri): ThumbnailCache {
         thumbnails?.takeIf { thumbnailsUri == uri }?.let { return it }
@@ -123,11 +108,8 @@ class PdfReaderRepository(private val context: Context) {
             runCatching { session?.close() }
             session = null
         }
-        synchronized(textLock) {
-            runCatching { textIndex?.close() }
-            textIndex = null
-            textIndexUri = null
-        }
+        storedText = emptyMap()
+        storedTextUri = null
         thumbnails?.clearMemory()
         thumbnails = null
         thumbnailsUri = null

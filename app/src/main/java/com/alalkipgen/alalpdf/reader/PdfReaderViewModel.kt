@@ -99,6 +99,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     private val wakeUp = Channel<Unit>(Channel.CONFLATED)
     private val sequence = AtomicLong(0)
     private val textRequests = ConcurrentHashMap<Int, Boolean>()
+    private val linkRequests = ConcurrentHashMap<Int, Boolean>()
     private val thumbnailRequests = ConcurrentHashMap<Int, Boolean>()
     private var searchJob: Job? = null
 
@@ -155,6 +156,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         synchronized(queueLock) { queue.clear(); queuedPages.clear() }
         searchJob?.cancel()
         textRequests.clear()
+        linkRequests.clear()
         thumbnailRequests.clear()
         cache.clear()
         renderedWidths.clear()
@@ -183,9 +185,6 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                         currentGeneration,
                     )
                     requestPageText(uri, initialPage.coerceIn(0, count - 1))
-                }
-                runCatching { repository.links(uri) }.onSuccess { links ->
-                    if (currentGeneration == generation) _uiState.update { state -> state.copy(pageLinks = links) }
                 }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -237,6 +236,25 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                     )
                 }
             }
+        }
+    }
+
+    fun requestPageLinks(uri: Uri, page: Int) {
+        if (page < 0 || uri.toString() != loadedUri) return
+        if (linkRequests.putIfAbsent(page, true) != null) return
+        val expectedGeneration = generation
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { repository.pageLinks(uri, page) }
+                .onSuccess { links ->
+                    if (expectedGeneration != generation) return@onSuccess
+                    _uiState.update { state ->
+                        state.copy(pageLinks = state.pageLinks + (page to links))
+                    }
+                }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    linkRequests.remove(page)
+                }
         }
     }
 

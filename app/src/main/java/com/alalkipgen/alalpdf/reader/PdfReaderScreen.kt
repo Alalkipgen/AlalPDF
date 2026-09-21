@@ -125,6 +125,7 @@ fun PdfReaderScreen(
     onPageSelected: (Int) -> Unit,
     onRender: (Int) -> Unit,
     onRequestPageText: (Int) -> Unit = {},
+    onRequestPageLinks: (Int) -> Unit = {},
     onSearch: (String) -> Unit = {},
     onClearSearch: () -> Unit = {},
     onPasswordSubmit: (String) -> Unit = {},
@@ -195,9 +196,19 @@ fun PdfReaderScreen(
         onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 
-    // Text is pulled one page at a time, for the page actually on screen.
-    LaunchedEffect(visiblePage, state.pageCount) {
-        if (state.pageCount > 0) onRequestPageText(visiblePage)
+    // Heavy text geometry and PDFBox link parsing wait until scrolling settles.
+    // This prevents three engines competing while PdfRenderer is producing the
+    // visible-page preview.
+    LaunchedEffect(listState, state.pageCount) {
+        snapshotFlow {
+            listState.isScrollInProgress to listState.firstVisibleItemIndex
+        }.distinctUntilChanged().collectLatest { (scrolling, page) ->
+            if (!scrolling && state.pageCount > 0) {
+                delay(SETTLED_EXTRACTION_DELAY_MS)
+                onRequestPageText(page)
+                onRequestPageLinks(page)
+            }
+        }
     }
     LaunchedEffect(textOpen, visiblePage) {
         if (textOpen) onRequestPageText(visiblePage)
@@ -846,6 +857,8 @@ fun PdfReaderScreen(
         }
     }
 }
+
+private const val SETTLED_EXTRACTION_DELAY_MS = 250L
 
 private fun Context.openWebLink(url: String) {
     val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return
