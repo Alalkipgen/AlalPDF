@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.alalkipgen.alalpdf.create.CreatePdfMode
 import com.alalkipgen.alalpdf.create.CreatePdfScreen
+import com.alalkipgen.alalpdf.create.CreatePdfRepository
+import com.alalkipgen.alalpdf.create.PdfDraft
 import com.alalkipgen.alalpdf.tools.PdfToolsScreen
 import com.alalkipgen.alalpdf.data.AlalPdfDatabase
 import com.alalkipgen.alalpdf.data.AlalPdfRepository
@@ -93,6 +95,7 @@ private const val SCREEN_LIBRARY = "library"
 private const val SCREEN_FOLDER = "folder"
 private const val SCREEN_READER = "reader"
 private const val SCREEN_CREATE = "create"
+private const val SCREEN_DOCUMENT_EDITOR = "document-editor"
 private const val SCREEN_TOOLS = "tools"
 
 @Composable
@@ -104,6 +107,7 @@ private fun AppRoot(
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
+    val appScope = rememberCoroutineScope()
     val libraryRepository = remember(appContext) { PdfLibraryRepository(appContext) }
     val deviceScan = remember(appContext) { DeviceScanRepository(appContext) }
     val prefs = remember(appContext) { LibraryPrefs(appContext) }
@@ -119,6 +123,10 @@ private fun AppRoot(
     var selectedUri by rememberSaveable { mutableStateOf<String?>(null) }
     var folderUri by rememberSaveable { mutableStateOf<String?>(null) }
     var createMode by rememberSaveable { mutableStateOf<String?>(null) }
+    var draftMode by rememberSaveable { mutableStateOf<String?>(null) }
+    var draftTitle by rememberSaveable { mutableStateOf("") }
+    var draftHtml by rememberSaveable { mutableStateOf("") }
+    var draftImages by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var createSession by rememberSaveable { mutableStateOf(0) }
     var readerSession by rememberSaveable { mutableStateOf(0) }
 
@@ -189,6 +197,41 @@ private fun AppRoot(
                 initialMode = createMode?.let { runCatching { CreatePdfMode.valueOf(it) }.getOrNull() },
             ) }
         }
+        SCREEN_DOCUMENT_EDITOR -> {
+            val current = selectedUri
+            if (current == null || draftMode == null) {
+                screen = SCREEN_READER
+            } else {
+                BackHandler { screen = SCREEN_READER }
+                key(createSession) {
+                    CreatePdfScreen(
+                        onBack = { screen = SCREEN_READER },
+                        onCreated = { uri ->
+                            viewModel.openDocument(uri)
+                            selectedUri = uri.toString()
+                            readerSession++
+                            draftMode = null
+                            draftTitle = ""
+                            draftHtml = ""
+                            draftImages = arrayListOf()
+                            createSession++
+                            screen = SCREEN_READER
+                        },
+                        initialMode = runCatching {
+                            CreatePdfMode.valueOf(draftMode!!)
+                        }.getOrDefault(CreatePdfMode.TEXT),
+                        initialDraft = PdfDraft(
+                            runCatching { CreatePdfMode.valueOf(draftMode!!) }
+                                .getOrDefault(CreatePdfMode.TEXT),
+                            draftTitle,
+                            draftHtml,
+                            draftImages,
+                        ),
+                        editingUri = Uri.parse(current),
+                    )
+                }
+            }
+        }
         SCREEN_FOLDER -> {
             val tree = folderUri
             if (tree == null) screen = SCREEN_LIBRARY else FolderBrowserRoute(
@@ -224,7 +267,26 @@ private fun AppRoot(
                 prefs = prefs,
                 readerSession = readerSession,
                 onBack = { screen = SCREEN_LIBRARY; selectedUri = null },
-                onEdit = { screen = SCREEN_TOOLS },
+                onEdit = {
+                    appScope.launch {
+                        val draft = runCatching {
+                            CreatePdfRepository(appContext).readDraft(Uri.parse(current))
+                        }.getOrNull()
+                        if (draft != null &&
+                            (draft.mode == CreatePdfMode.TEXT ||
+                                draft.mode == CreatePdfMode.IMAGE_TEXT)
+                        ) {
+                            draftMode = draft.mode.name
+                            draftTitle = draft.title
+                            draftHtml = draft.bodyHtml
+                            draftImages = ArrayList(draft.images)
+                            createSession++
+                            screen = SCREEN_DOCUMENT_EDITOR
+                        } else {
+                            screen = SCREEN_TOOLS
+                        }
+                    }
+                },
             )
         }
         else -> LibraryScreen(
@@ -234,7 +296,15 @@ private fun AppRoot(
             onOpenPdf = { pdfLauncher.launch(arrayOf("application/pdf")) },
             onOpenFolder = { folderLauncher.launch(null) },
             onScanDevice = { requestDeviceScan() },
-            onCreatePdf = { mode -> createMode=mode?.name;createSession++;screen=SCREEN_CREATE },
+            onCreatePdf = { mode ->
+                draftMode = null
+                draftTitle = ""
+                draftHtml = ""
+                draftImages = arrayListOf()
+                createMode = mode?.name
+                createSession++
+                screen = SCREEN_CREATE
+            },
             onThemeChange = onThemeChange,
             onSortChange = viewModel::setSort,
             onOpenDocument = { document ->
@@ -336,6 +406,7 @@ private fun ReaderRoute(
         },
         onRender = { page -> readerViewModel.requestPage(uri, page, width) },
         onRequestPageText = { page -> readerViewModel.requestPageText(uri, page) },
+        onRequestPageLinks = { page -> readerViewModel.requestPageLinks(uri, page) },
         onSearch = { query -> readerViewModel.search(uri, query) },
         onClearSearch = { readerViewModel.clearSearch() },
         onPasswordSubmit = { value -> password=value;readerViewModel.load(uri,width,currentPage,nightMode,value) },

@@ -21,10 +21,10 @@ import java.io.Closeable
  * Boxes are returned in normalized page coordinates (0..1, origin top-left) so
  * the overlay does not care about the zoom level or the rendered size.
  */
-class PdfiumTextSource private constructor(
+internal class PdfiumTextSource private constructor(
     private val document: PdfDocument,
     private val descriptor: ParcelFileDescriptor,
-) : Closeable {
+) : PdfTextEngine {
 
     private val lock = Any()
     private val runCache = LruCache<Int, List<PdfTextRun>>(CACHE_PAGES)
@@ -32,11 +32,11 @@ class PdfiumTextSource private constructor(
     @Volatile
     private var closed = false
 
-    val pageCount: Int
+    override val pageCount: Int
         get() = if (closed) 0 else runCatching { document.getPageCount() }.getOrDefault(0)
 
     /** One run per character, in reading order, with normalized coordinates. */
-    fun charRuns(page: Int): List<PdfTextRun> {
+    override fun charRuns(page: Int): List<PdfTextRun> {
         if (closed || page < 0) return emptyList()
         runCache.get(page)?.let { return it }
         val runs = synchronized(lock) { readCharRuns(page) }
@@ -45,7 +45,7 @@ class PdfiumTextSource private constructor(
     }
 
     /** Page size in PDF points, or null when the page cannot be opened. */
-    fun pageSizePoints(page: Int): android.util.SizeF? = runCatching {
+    override fun pageSizePoints(page: Int): android.util.SizeF? = runCatching {
         synchronized(lock) {
             document.openPage(page).use { pdfPage ->
                 android.util.SizeF(
@@ -57,11 +57,38 @@ class PdfiumTextSource private constructor(
     }.getOrNull()
 
     /** Page text in the same order as [charRuns]. */
-    fun pageText(page: Int): String {
+    override fun pageText(page: Int): String {
         val runs = charRuns(page)
         if (runs.isEmpty()) return ""
         return buildString { runs.forEach { append(it.text) } }
     }
+
+    override fun pageLinks(page: Int): List<PdfPageLink> = runCatching {
+        synchronized(lock) {
+            document.openPage(page).use { pdfPage ->
+                val width = pdfPage.getPageWidthPoint().toFloat().coerceAtLeast(1f)
+                val height = pdfPage.getPageHeightPoint().toFloat().coerceAtLeast(1f)
+                pdfPage.getPageLinks().mapNotNull { link: PdfDocument.Link ->
+                    val url = link.uri?.trim()?.takeIf(::isSafeWebUrl) ?: return@mapNotNull null
+                    val box = link.bounds
+                    val left = minOf(box.left, box.right) / width
+                    val right = maxOf(box.left, box.right) / width
+                    val top = 1f - maxOf(box.top, box.bottom) / height
+                    val bottom = 1f - minOf(box.top, box.bottom) / height
+                    rotateLinkBounds(
+                        left.coerceIn(0f, 1f),
+                        top.coerceIn(0f, 1f),
+                        right.coerceIn(0f, 1f),
+                        bottom.coerceIn(0f, 1f),
+                        pdfPage.getPageRotation(),
+                        url,
+                    )
+                }.distinctBy { link ->
+                    listOf(link.url, link.left, link.top, link.right, link.bottom)
+                }
+            }
+        }
+    }.getOrDefault(emptyList())
 
     private fun readCharRuns(page: Int): List<PdfTextRun> = runCatching {
         document.openPage(page).use { pdfPage ->
@@ -112,11 +139,53 @@ class PdfiumTextSource private constructor(
         runCatching { descriptor.close() }
     }
 
+    private fun isSafeWebUrl(value: String): Boolean {
+        val scheme = runCatching { Uri.parse(value).scheme?.lowercase() }.getOrNull()
+        return scheme == "http" || scheme == "https"
+    }
+
+    private fun rotateLinkBounds(
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        rotation: Int,
+        url: String,
+    ): PdfPageLink {
+        val points = listOf(left to top, right to top, left to bottom, right to bottom)
+            .map { (x, y) ->
+                when (((rotation % 360) + 360) % 360) {
+                    90 -> (1f - y) to x
+                    180 -> (1f - x) to (1f - y)
+                    270 -> y to (1f - x)
+                    else -> x to y
+                }
+            }
+        return PdfPageLink(
+            points.minOf { it.first },
+            points.minOf { it.second },
+            points.maxOf { it.first },
+            points.maxOf { it.second },
+            url,
+        )
+    }
+
     companion object {
         private const val CACHE_PAGES = 8
 
         fun open(context: Context, uri: Uri, password: String?): PdfiumTextSource? = runCatching {
             val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
+            open(context, descriptor, password) ?: run {
+                descriptor.close()
+                null
+            }
+        }.getOrNull()
+
+        fun open(
+            context: Context,
+            descriptor: ParcelFileDescriptor,
+            password: String?,
+        ): PdfiumTextSource? = runCatching {
             val core = PdfiumCore(context)
             val document = if (password.isNullOrEmpty()) {
                 core.newDocument(descriptor)
@@ -124,6 +193,9 @@ class PdfiumTextSource private constructor(
                 core.newDocument(descriptor, password)
             }
             PdfiumTextSource(document, descriptor)
-        }.getOrNull()
+        }.getOrElse {
+            runCatching { descriptor.close() }
+            null
+        }
     }
 }

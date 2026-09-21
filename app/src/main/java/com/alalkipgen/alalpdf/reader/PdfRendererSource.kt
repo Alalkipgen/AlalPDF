@@ -8,11 +8,11 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import java.io.Closeable
 
-class PdfRendererSource private constructor(
+internal class PdfRendererSource private constructor(
     private val descriptor: ParcelFileDescriptor,
     private val renderer: PdfRenderer,
-) : Closeable {
-    val pageCount: Int get() = renderer.pageCount
+) : PdfRenderEngine {
+    override val pageCount: Int get() = renderer.pageCount
 
     /**
      * Renders one page.
@@ -27,10 +27,10 @@ class PdfRendererSource private constructor(
      * result was then discarded because the UI already applies an inverting
      * ColorFilter when drawing.
      */
-    fun renderPage(
+    override fun renderPage(
         pageIndex: Int,
         width: Int,
-        config: Bitmap.Config = Bitmap.Config.ARGB_8888,
+        config: Bitmap.Config,
     ): Bitmap {
         require(pageIndex in 0 until renderer.pageCount)
         require(width > 0)
@@ -47,15 +47,20 @@ class PdfRendererSource private constructor(
     }
 
     /** Page aspect ratio (height / width) without rendering any pixels. */
-    fun pageAspectRatio(pageIndex: Int): Float {
+    override fun pageAspectRatio(pageIndex: Int): Float {
         require(pageIndex in 0 until renderer.pageCount)
         renderer.openPage(pageIndex).use { page ->
             return page.height.toFloat() / page.width.coerceAtLeast(1)
         }
     }
 
+    override fun textRuns(pageIndex: Int): List<PdfTextRun> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return emptyList()
+        return textRunsApi35(pageIndex)
+    }
+
     @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
-    fun textRuns(pageIndex: Int): List<PdfTextRun> {
+    private fun textRunsApi35(pageIndex: Int): List<PdfTextRun> {
         require(pageIndex in 0 until renderer.pageCount)
         renderer.openPage(pageIndex).use { page ->
             val width = page.width.toFloat().coerceAtLeast(1f)

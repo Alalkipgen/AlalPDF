@@ -29,4 +29,8 @@ class BitmapPageCache(maxMemoryBytes: Int) {
     @Synchronized fun clear() {
         cache.evictAll()
     }
+
+    @Synchronized fun trimToBytes(bytes: Int) {
+        cache.trimToSize(bytes.coerceAtLeast(0))
+    }
 }
