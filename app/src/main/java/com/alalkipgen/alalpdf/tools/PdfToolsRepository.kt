@@ -100,39 +100,49 @@ class PdfToolsRepository(private val context: Context) {
     @SuppressLint("ResourceType")
     suspend fun save(input: Uri, output: Uri, plan: EditPlan) = withContext(Dispatchers.IO) {
         val temp = File(context.cacheDir, "edit-${System.nanoTime()}.pdf")
-        context.contentResolver.openInputStream(input)!!.use { stream ->
-            PDDocument.load(stream).use { document ->
-                reorder(document, plan.pages)
-                // Overlay documents must stay open until the target is saved,
-                // otherwise the imported form loses its resources.
-                val overlays = ArrayList<PDDocument>()
-                val scratch = ArrayList<File>()
-                if (document.numberOfPages > 0) {
-                    plan.texts.filter { it.text.isNotBlank() }.forEach { note ->
-                        val page = document.getPage(note.page.coerceIn(0, document.numberOfPages - 1))
-                        drawText(document, page, note, overlays, scratch)
-                    }
-                    plan.images.forEach { note ->
-                        val page = document.getPage(note.page.coerceIn(0, document.numberOfPages - 1))
-                        drawImage(document, page, note)
+        try {
+            // The input is completely closed before output is opened. This is
+            // required for in-place Save; PDFBox warns that writing over a file
+            // which it is still reading can corrupt the document.
+            context.contentResolver.openInputStream(input)?.use { stream ->
+                PDDocument.load(stream).use { document ->
+                    reorder(document, plan.pages)
+                    val overlays = ArrayList<PDDocument>()
+                    val scratch = ArrayList<File>()
+                    try {
+                        if (document.numberOfPages > 0) {
+                            plan.texts.filter { it.text.isNotBlank() }.forEach { note ->
+                                val page = document.getPage(note.page.coerceIn(0, document.numberOfPages - 1))
+                                drawText(document, page, note, overlays, scratch)
+                            }
+                            plan.images.forEach { note ->
+                                val page = document.getPage(note.page.coerceIn(0, document.numberOfPages - 1))
+                                drawImage(document, page, note)
+                            }
+                        }
+                        document.save(temp)
+                    } finally {
+                        overlays.forEach { runCatching { it.close() } }
+                        scratch.forEach { runCatching { it.delete() } }
                     }
                 }
-                document.save(temp)
-                overlays.forEach { runCatching { it.close() } }
-                scratch.forEach { runCatching { it.delete() } }
+            } ?: error("Unable to read the source PDF")
+            check(temp.length() > 5L) { "Edited PDF is empty" }
+            val descriptor = context.contentResolver.openFileDescriptor(output, "rwt")
+                ?: error("This PDF is read-only. Use Save As instead.")
+            descriptor.use { pfd ->
+                FileOutputStream(pfd.fileDescriptor).use { out ->
+                    temp.inputStream().use { it.copyTo(out) }
+                    out.flush()
+                    runCatching { out.fd.sync() }
+                }
             }
+            context.contentResolver.openInputStream(output)?.use {
+                PDDocument.load(it).use { document -> check(document.numberOfPages > 0) }
+            } ?: error("Unable to verify the saved PDF")
+        } finally {
+            temp.delete()
         }
-        check(temp.length() > 5L) { "Edited PDF is empty" }
-        val descriptor = context.contentResolver.openFileDescriptor(output, "rwt") ?: error("Unable to save edited PDF")
-        descriptor.use { pfd ->
-            FileOutputStream(pfd.fileDescriptor).use { out ->
-                temp.inputStream().use { it.copyTo(out) }
-                out.flush()
-                runCatching { out.fd.sync() }
-            }
-        }
-        context.contentResolver.openInputStream(output)!!.use { PDDocument.load(it).use { check(it.numberOfPages > 0) } }
-        temp.delete()
     }
 
     /**

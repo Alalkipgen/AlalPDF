@@ -71,16 +71,22 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
         if (picked != null) images = images + ImageNote(page = selected, uri = picked)
     }
-    val output = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/pdf")
-    ) { target ->
-        if (target != null) scope.launch {
+    fun saveTo(target: Uri) {
+        if (busy) return
+        scope.launch {
             busy = true
+            error = null
             runCatching { repository.save(uri, target, EditPlan(pages, notes, images)) }
                 .onSuccess { saved(target) }
                 .onFailure { error = it.message ?: "Could not save the edited PDF" }
             busy = false
         }
+    }
+
+    val saveAs = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { target ->
+        if (target != null) saveTo(target)
     }
 
     BackHandler(onBack = back)
@@ -94,9 +100,13 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
                 title = { Text("Edit PDF") },
                 actions = {
                     TextButton(
-                        onClick = { output.launch("Edited PDF.pdf") },
+                        onClick = { saveTo(uri) },
                         enabled = pages.isNotEmpty() && !busy,
-                    ) { Text(if (busy) "Saving\u2026" else "Save copy") }
+                    ) { Text(if (busy) "Saving\u2026" else "Save") }
+                    TextButton(
+                        onClick = { saveAs.launch("Edited PDF.pdf") },
+                        enabled = pages.isNotEmpty() && !busy,
+                    ) { Text("Save As") }
                 },
             )
         },
@@ -267,11 +277,17 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
                     confirmButton = {
                         TextButton(onClick = {
                             val text = reflow.orEmpty()
-                            val left = blocks.minOf { it.left }
-                            val top = blocks.minOf { it.top }
-                            val right = blocks.maxOf { it.right }
-                            val bottom = blocks.maxOf { it.bottom }
-                            val size = blocks.map { it.fontSizePoints }.sorted()[blocks.size / 2]
+                            val pageBlocks = blocks.toList()
+                            if (pageBlocks.isEmpty()) {
+                                error = "This page has no editable text"
+                                reflow = null
+                                return@TextButton
+                            }
+                            val left = pageBlocks.minOf { it.left }
+                            val top = pageBlocks.minOf { it.top }
+                            val right = pageBlocks.maxOf { it.right }
+                            val bottom = pageBlocks.maxOf { it.bottom }
+                            val size = pageBlocks.map { it.fontSizePoints }.sorted()[pageBlocks.size / 2]
                             notes = notes.filterNot { it.page == selected } + TextNote(
                                 page = selected,
                                 text = text,

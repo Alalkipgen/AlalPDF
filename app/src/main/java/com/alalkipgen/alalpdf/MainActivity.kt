@@ -34,8 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.alalkipgen.alalpdf.create.CreatePdfMode
 import com.alalkipgen.alalpdf.create.CreatePdfScreen
-import com.alalkipgen.alalpdf.create.CreatePdfRepository
-import com.alalkipgen.alalpdf.create.PdfDraft
 import com.alalkipgen.alalpdf.tools.PdfToolsScreen
 import com.alalkipgen.alalpdf.data.AlalPdfDatabase
 import com.alalkipgen.alalpdf.data.AlalPdfRepository
@@ -122,11 +120,8 @@ private fun AppRoot(
     var selectedUri by rememberSaveable { mutableStateOf<String?>(null) }
     var folderUri by rememberSaveable { mutableStateOf<String?>(null) }
     var createMode by rememberSaveable { mutableStateOf<String?>(null) }
-    var draftMode by rememberSaveable { mutableStateOf<String?>(null) }
-    var draftTitle by rememberSaveable { mutableStateOf("") }
-    var draftHtml by rememberSaveable { mutableStateOf("") }
-    var draftImages by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var createSession by rememberSaveable { mutableStateOf(0) }
+    var readerSession by rememberSaveable { mutableStateOf(0) }
 
     LaunchedEffect(Unit) { viewModel.loadRecent() }
     LaunchedEffect(incomingPdf) {
@@ -188,15 +183,11 @@ private fun AppRoot(
                     viewModel.openDocument(uri)
                     selectedUri = uri.toString()
                     createMode = null
-                    draftMode = null
-                    draftTitle = ""
-                    draftHtml = ""
-                    draftImages = arrayListOf()
                     createSession++
+                    readerSession++
                     screen = SCREEN_READER
                 },
                 initialMode = createMode?.let { runCatching { CreatePdfMode.valueOf(it) }.getOrNull() },
-                initialDraft = draftMode?.let { PdfDraft(CreatePdfMode.valueOf(it),draftTitle,draftHtml,draftImages) },
             ) }
         }
         SCREEN_FOLDER -> {
@@ -212,7 +203,19 @@ private fun AppRoot(
                 },
             )
         }
-        SCREEN_TOOLS -> { val current=selectedUri;if(current==null)screen=SCREEN_LIBRARY else PdfToolsScreen(Uri.parse(current),{screen=SCREEN_READER}){saved->viewModel.openDocument(saved);selectedUri=saved.toString();screen=SCREEN_READER} }
+        SCREEN_TOOLS -> {
+            val current = selectedUri
+            if (current == null) screen = SCREEN_LIBRARY else PdfToolsScreen(
+                uri = Uri.parse(current),
+                back = { screen = SCREEN_READER },
+                saved = { saved ->
+                    viewModel.openDocument(saved)
+                    selectedUri = saved.toString()
+                    readerSession++
+                    screen = SCREEN_READER
+                },
+            )
+        }
         SCREEN_READER -> {
             val current = selectedUri
             if (current == null) screen = SCREEN_LIBRARY else ReaderRoute(
@@ -220,8 +223,9 @@ private fun AppRoot(
                 libraryRepository = libraryRepository,
                 dataRepository = dataRepository,
                 prefs = prefs,
+                readerSession = readerSession,
                 onBack = { screen = SCREEN_LIBRARY; selectedUri = null },
-                onEdit = { appScope.launch { val d=runCatching{CreatePdfRepository(appContext).readDraft(Uri.parse(current))}.getOrNull();if(d!=null){draftMode=d.mode.name;draftTitle=d.title;draftHtml=d.bodyHtml;draftImages=ArrayList(d.images);createMode=d.mode.name;createSession++;screen=SCREEN_CREATE}else screen=SCREEN_TOOLS } },
+                onEdit = { screen = SCREEN_TOOLS },
             )
         }
         else -> LibraryScreen(
@@ -231,7 +235,7 @@ private fun AppRoot(
             onOpenPdf = { pdfLauncher.launch(arrayOf("application/pdf")) },
             onOpenFolder = { folderLauncher.launch(null) },
             onScanDevice = { requestDeviceScan() },
-            onCreatePdf = { mode -> draftMode=null;draftTitle="";draftHtml="";draftImages=arrayListOf();createMode=mode?.name;createSession++;screen=SCREEN_CREATE },
+            onCreatePdf = { mode -> createMode=mode?.name;createSession++;screen=SCREEN_CREATE },
             onThemeChange = onThemeChange,
             onSortChange = viewModel::setSort,
             onOpenDocument = { document ->
@@ -254,6 +258,7 @@ private fun ReaderRoute(
     libraryRepository: PdfLibraryRepository,
     dataRepository: AlalPdfRepository,
     prefs: LibraryPrefs,
+    readerSession: Int,
     onBack: () -> Unit,
     onEdit: () -> Unit,
 ) {
@@ -267,7 +272,7 @@ private fun ReaderRoute(
     }
 
     val readerViewModel: PdfReaderViewModel = viewModel(
-        key = "reader-$uri",
+        key = "reader-$uri-$readerSession",
         factory = PdfReaderViewModel.Factory(PdfReaderRepository(appContext)),
     )
     readerViewModel.initialize(appContext)
