@@ -7,4 +7,4 @@ Backup: backup/pre-v031-20260921-131926
 - [x] P2 Exact hyperlinks and legacy compatibility — compile and tests passed
 - [x] P3 Preview + Save UX — compile passed
 - [x] P4 Idle full-quality promotion — compile and tests passed
-- [ ] P5 Tests, CI, merge, release
+- [ ] P5 CI, merge, release — local debug/release APK, unit tests and lint passed
