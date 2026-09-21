@@ -5,6 +5,7 @@ import android.net.Uri
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.interactive.action.PDActionURI
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink
+import kotlin.math.roundToInt
 
 /** Clickable web annotation bounds normalized to the rendered page. */
 data class PdfPageLink(val left: Float, val top: Float, val right: Float, val bottom: Float, val url: String)
@@ -31,7 +32,19 @@ internal object PdfLinkExtractor {
                 }
             }
         } ?: return emptyMap()
-        return result
+        // Malformed generators sometimes repeat the same annotation object in
+        // a page's Annots array. Never create two hit targets for one rectangle.
+        return result.mapValues { (_, links) ->
+            links.distinctBy { link ->
+                listOf(
+                    link.url,
+                    (link.left * 10_000).roundToInt(),
+                    (link.top * 10_000).roundToInt(),
+                    (link.right * 10_000).roundToInt(),
+                    (link.bottom * 10_000).roundToInt(),
+                )
+            }
+        }
     }
 
     private fun rotateRect(left: Float, top: Float, right: Float, bottom: Float, rotation: Int): PdfPageLink {
