@@ -7,6 +7,7 @@ import android.net.Uri
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.text.SpannedString
 import android.text.style.URLSpan
 import android.util.Base64
 import androidx.core.text.HtmlCompat
@@ -158,15 +159,32 @@ class CreatePdfRepository(private val context: Context) {
             val start = line; val capacity = pageHeight - margin - top
             while (line < layout.lineCount && layout.getLineBottom(line) - layout.getLineTop(start) <= capacity) line++
             if (line == start && line < layout.lineCount) line++
+            // Build a page-local layout from an exclusive character slice.
+            // Drawing the complete document layout once per page and relying
+            // on a floating-point clip boundary could paint the bottom line on
+            // both pages. A character can now belong to exactly one page.
+            val pageStart = layout.getLineStart(start)
+            val pageEnd = layout.getLineEnd(line - 1)
+            val pageStyled = SpannedString(styled.subSequence(pageStart, pageEnd))
+            val pageLayout = StaticLayout.Builder.obtain(
+                pageStyled,
+                0,
+                pageStyled.length,
+                paint,
+                (pageWidth - margin * 2).toInt(),
+            ).setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setIncludePad(false)
+                .setLineSpacing(3f, 1f)
+                .build()
             val pageNumber = number++; val page = doc.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create())
             page.canvas.drawColor(Color.WHITE)
             if (hasTitle && heading != null) {
                 page.canvas.save(); page.canvas.translate(margin, margin); heading.draw(page.canvas); page.canvas.restore()
             }
             page.canvas.save(); page.canvas.clipRect(margin, top, pageWidth - margin, pageHeight - margin)
-            page.canvas.translate(margin, top - layout.getLineTop(start)); layout.draw(page.canvas); page.canvas.restore()
-            collectLinks(styled, layout, start, line, top, pageNumber - 1, links)
-            val body = styled.subSequence(layout.getLineStart(start), layout.getLineEnd(line - 1)).toString()
+            page.canvas.translate(margin, top); pageLayout.draw(page.canvas); page.canvas.restore()
+            collectLinks(pageStyled, pageLayout, 0, pageLayout.lineCount, top, pageNumber - 1, links)
+            val body = pageStyled.toString()
             pageTexts[pageNumber - 1] = if (hasTitle) (title + "\n\n" + body).trim() else body.trim()
             doc.finishPage(page)
         } while (line < layout.lineCount)

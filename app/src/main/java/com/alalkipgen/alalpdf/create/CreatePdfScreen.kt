@@ -88,12 +88,6 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
     }
     BackHandler { back() }
     val textMode = mode == CreatePdfMode.TEXT || mode == CreatePdfMode.IMAGE_TEXT
-    // Like a notes app: the bar slides away while writing downwards and comes
-    // back as soon as the page is scrolled up again.
-    val topBarScroll = TopAppBarDefaults.enterAlwaysScrollBehavior(rememberTopAppBarState())
-    // Keep the last offset outside Compose state. Scroll events are hot; using
-    // mutableState here recomposed and remeasured the whole editor every pixel.
-    val lastEditorScroll = remember { intArrayOf(0) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -104,7 +98,6 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                         Icon(Icons.Default.Visibility, null); Spacer(Modifier.width(6.dp)); Text(if (busy) "Building…" else "Preview")
                     }
                 },
-                scrollBehavior = topBarScroll,
             )
         },
         floatingActionButton = {
@@ -123,13 +116,6 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                             controller = editor,
                             modifier = Modifier.fillMaxSize(),
                             onLongLink = ::linkDialog,
-                            onScroll = { y ->
-                                val delta = y - lastEditorScroll[0]
-                                lastEditorScroll[0] = y
-                                val state = topBarScroll.state
-                                state.heightOffset =
-                                    (state.heightOffset - delta).coerceIn(state.heightOffsetLimit, 0f)
-                            },
                         )
                     }
                 }
