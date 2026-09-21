@@ -11,6 +11,8 @@ import android.text.SpannedString
 import android.text.style.URLSpan
 import android.util.Base64
 import androidx.core.text.HtmlCompat
+import com.alalkipgen.alalpdf.common.AlalLinkMetadata
+import com.alalkipgen.alalpdf.common.AlalStoredLink
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
@@ -51,19 +53,35 @@ class CreatePdfRepository(private val context: Context) {
         validatePdf(target)
         target
     }
-    suspend fun save(source: File, output: Uri) = withContext(Dispatchers.IO) {
+    suspend fun save(
+        source: File,
+        output: Uri,
+        deleteNewDocumentOnFailure: Boolean = false,
+    ) = withContext(Dispatchers.IO) {
         validatePdf(source)
         try {
-            val descriptor = resolver.openFileDescriptor(output, "rwt")
-                ?: resolver.openFileDescriptor(output, "w")
-                ?: error("Unable to create output file")
-            descriptor.use { pfd ->
-                FileOutputStream(pfd.fileDescriptor).use { out ->
-                    FileInputStream(source).use { it.copyTo(out) }
-                    out.flush()
-                    runCatching { out.fd.sync() }
+            var lastFailure: Throwable? = null
+            var written = false
+            for (mode in OUTPUT_MODES) {
+                val attempt = runCatching {
+                    val descriptor = resolver.openFileDescriptor(output, mode)
+                        ?: error("Document provider returned no file descriptor")
+                    descriptor.use { pfd ->
+                        FileOutputStream(pfd.fileDescriptor).use { out ->
+                            FileInputStream(source).use { input -> input.copyTo(out) }
+                            out.flush()
+                            runCatching { out.fd.sync() }
+                        }
+                        pfd.checkError()
+                    }
                 }
+                if (attempt.isSuccess) {
+                    written = true
+                    break
+                }
+                lastFailure = attempt.exceptionOrNull()
             }
+            if (!written) throw lastFailure ?: error("Unable to create output file")
             resolver.openInputStream(output)?.use { input ->
                 val header = ByteArray(5)
                 check(input.read(header) == 5 && String(header, Charsets.US_ASCII) == "%PDF-") {
@@ -77,8 +95,13 @@ class CreatePdfRepository(private val context: Context) {
                 resolver.takePersistableUriPermission(output, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             }
         } catch (error: Throwable) {
-            runCatching { android.provider.DocumentsContract.deleteDocument(resolver, output) }
-            runCatching { resolver.delete(output, null, null) }
+            // ACTION_CREATE_DOCUMENT creates the destination before this method
+            // runs. Remove that placeholder on Save As failure, but never
+            // delete an existing document after an in-place Save failure.
+            if (deleteNewDocumentOnFailure) {
+                runCatching { android.provider.DocumentsContract.deleteDocument(resolver, output) }
+                runCatching { resolver.delete(output, null, null) }
+            }
             throw error
         }
     }
@@ -240,7 +263,24 @@ class CreatePdfRepository(private val context: Context) {
             fun encode(v:String)=Base64.encodeToString(v.toByteArray(Charsets.UTF_8),Base64.NO_WRAP)
             doc.documentInformation.apply { setCustomMetadataValue("AlalPDF-Version","1");setCustomMetadataValue("AlalPDF-Mode",spec.mode.name);setCustomMetadataValue("AlalPDF-Title",encode(spec.title));setCustomMetadataValue("AlalPDF-Body",encode(spec.bodyHtml));setCustomMetadataValue("AlalPDF-Images",encode(spec.images.joinToString("\n")))
                 setCustomMetadataValue("AlalPDF-PageCount", pageTexts.size.toString())
-                pageTexts.forEach { (index, text) -> setCustomMetadataValue("AlalPDF-Page-" + index, encode(text)) } }
+                pageTexts.forEach { (index, text) -> setCustomMetadataValue("AlalPDF-Page-" + index, encode(text)) }
+                setCustomMetadataValue("AlalPDF-LinkCount", links.size.toString())
+                links.forEachIndexed { index, item ->
+                    setCustomMetadataValue(
+                        "AlalPDF-Link-$index",
+                        AlalLinkMetadata.encode(
+                            AlalStoredLink(
+                                page = item.page,
+                                left = item.left / pageWidth,
+                                top = item.top / pageHeight,
+                                right = item.right / pageWidth,
+                                bottom = item.bottom / pageHeight,
+                                url = item.url,
+                            ),
+                        ),
+                    )
+                }
+            }
             doc.save(temp)
         }
         check(file.delete() && temp.renameTo(file)) { "Unable to finalize PDF links" }
@@ -254,6 +294,7 @@ class CreatePdfRepository(private val context: Context) {
     private fun decode(uri: Uri) = resolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
 
     private companion object {
+        val OUTPUT_MODES = arrayOf("rwt", "wt", "w")
         val TITLE_SIZES = floatArrayOf(24f, 20f, 18f)
         const val TITLE_MAX_LINES = 3
         const val TITLE_GAP = 16f

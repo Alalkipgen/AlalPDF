@@ -328,6 +328,27 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     /**
+     * Promote only the page the user stopped on. While scrolling, previews win;
+     * after the idle debounce this request jumps ahead of neighbour work.
+     */
+    fun promoteFocusedPage(uri: Uri, pageIndex: Int, width: Int) {
+        val count = _uiState.value.pageCount
+        if (count <= 0 || uri.toString() != loadedUri) return
+        val page = pageIndex.coerceIn(0, count - 1)
+        if (page != focusedPage) return
+        synchronized(queueLock) {
+            enqueueLocked(
+                uri,
+                page,
+                renderWidth(width),
+                generation,
+                IDLE_FULL_RENDER_PRIORITY,
+            )
+        }
+        wakeUp.trySend(Unit)
+    }
+
+    /**
      * Requests whatever the list item needs. Pages far from the current one are
      * served by the thumbnail cache, which is what makes the page grid able to
      * show all 109 pages instead of the two or three still in the render window.
@@ -533,6 +554,29 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
+    /**
+     * A Compose viewModel keyed to a reader session remains in the Activity's
+     * ViewModelStore after the reader leaves composition. Explicitly close its
+     * native engines before opening the structured editor.
+     */
+    fun releaseDocument() {
+        generation++
+        loadedUri = null
+        searchJob?.cancel()
+        synchronized(queueLock) { queue.clear(); queuedPages.clear() }
+        textRequests.clear()
+        linkRequests.clear()
+        thumbnailRequests.clear()
+        Snapshot.withMutableSnapshot {
+            pages.clear()
+            thumbnails.clear()
+            pageAspectRatios.clear()
+        }
+        renderedWidths.clear()
+        if (::cache.isInitialized) cache.clear()
+        repository.close()
+    }
+
     override fun onCleared() {
         generation++
         wakeUp.close()
@@ -562,5 +606,6 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         const val FALLBACK_PREVIEW_WIDTH_PX = 280
         const val CACHE_LOW_MEMORY_BYTES = 4 * 1024 * 1024
         const val FULL_RENDER_PRIORITY = 100
+        const val IDLE_FULL_RENDER_PRIORITY = -100
     }
 }

@@ -385,7 +385,10 @@ private fun ReaderRoute(
         nightMode = nightMode,
         pendingPage = pendingPage,
         onPendingPageConsumed = { pendingPage = null },
-        onBack = onBack,
+        onBack = {
+            readerViewModel.releaseDocument()
+            onBack()
+        },
     onNightModeChange = { nightMode = it },
         onShare = {
             runCatching {
@@ -405,12 +408,16 @@ private fun ReaderRoute(
             readerViewModel.renderWindow(uri, page, width, nightMode)
         },
         onRender = { page -> readerViewModel.requestPage(uri, page, width) },
+        onPromotePage = { page -> readerViewModel.promoteFocusedPage(uri, page, width) },
         onRequestPageText = { page -> readerViewModel.requestPageText(uri, page) },
         onRequestPageLinks = { page -> readerViewModel.requestPageLinks(uri, page) },
         onSearch = { query -> readerViewModel.search(uri, query) },
         onClearSearch = { readerViewModel.clearSearch() },
         onPasswordSubmit = { value -> password=value;readerViewModel.load(uri,width,currentPage,nightMode,value) },
-        onEditPdf = onEdit,
+        onEditPdf = {
+            readerViewModel.releaseDocument()
+            onEdit()
+        },
     )
     if (showBookmarks) {
         BackHandler { showBookmarks = false }

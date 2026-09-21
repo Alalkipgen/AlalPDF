@@ -1,19 +1,18 @@
-# Alal PDF v0.3.0-beta
+# Alal PDF v0.3.1-beta
 
 ## Fixes
 
-- Alal-created Text PDFs now reopen in the structured blank-page editor, with direct **Save** and **Save As** instead of the general overlay editor.
-- Reworked reader ownership: Android `PdfRenderer` renders pages, PDFium handles text geometry/search/links, and PDFBox is limited to short-lived encrypted unlock, metadata, creation, and editing work.
-- Reader memory is bounded by device capability, uses a three-page display window, renders only the focused page at full quality, and uses low-memory RGB_565 previews for neighboring pages.
-- Added direction-aware render priority, instant previous-page cache reuse, Android memory-pressure trimming, and an OOM-safe low-resolution fallback instead of an app crash.
-- Text selection and hyperlinks load lazily after scrolling settles, avoiding competition with page rendering and preventing long-lived duplicate PDF document models.
-- PDF hyperlink hit boxes now come from the same PDFium session as text selection, with URL validation, rotation handling, and duplicate filtering.
-- Alal-created PDF save paths preserve structured draft metadata so later edits remain Word/notes-style.
+- **Save As** now builds and verifies the complete PDF before opening Android's file picker. Failed writes remove new zero-byte placeholders without ever deleting an existing document.
+- Document-provider writes retry safe truncate modes and verify both the PDF header and page count before reporting success.
+- Alal-created PDFs store exact hyperlink URLs and normalized hit boxes in document metadata. Older Alal PDFs and external PDFs use a short-lived annotation compatibility reader.
+- Leaving the reader for the structured editor explicitly closes its renderer and text engines, preventing the native-memory spike that could terminate the app during Save As.
+- Create Text PDF now shows labeled **Preview** and **Save** actions. Edit mode keeps **Save As** in the additional save menu.
+- Low-resolution previews remain fast while scrolling; after scrolling settles, the focused page is immediately promoted ahead of neighbor work for crisp text.
 
 ## Version
 
-- Version name: `0.3.0-beta`
-- Version code: `8`
+- Version name: `0.3.1-beta`
+- Version code: `9`
 - Minimum Android: Android 8.0 (API 26)
 
 Alal PDF works offline and does not request the Android `INTERNET` permission.

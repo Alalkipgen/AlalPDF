@@ -35,4 +35,15 @@ class ReaderMemoryPolicyTest {
             ReaderMemoryPolicy.renderOrder(center = 0, pageCount = 3, distance = 2, direction = -1),
         )
     }
+
+    @Test
+    fun renderOrder_keepsCurrentPageFirst() {
+        val order = ReaderMemoryPolicy.renderOrder(
+            center = 42,
+            pageCount = 100,
+            distance = 2,
+            direction = 1,
+        )
+        assertEquals(42, order.first())
+    }
 }

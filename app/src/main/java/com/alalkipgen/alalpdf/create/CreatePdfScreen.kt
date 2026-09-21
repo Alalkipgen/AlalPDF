@@ -85,6 +85,8 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
     var title by rememberSaveable { mutableStateOf(draft?.title.orEmpty()) }; var html by rememberSaveable { mutableStateOf(draft?.bodyHtml.orEmpty()) }
     var imageStrings by rememberSaveable { mutableStateOf(ArrayList(draft?.images.orEmpty())) }; var scanPaths by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var pendingScan by rememberSaveable{mutableStateOf<String?>(null)}; var previewPath by rememberSaveable { mutableStateOf<String?>(null) }; var busy by rememberSaveable { mutableStateOf(false) }; var message by rememberSaveable { mutableStateOf<String?>(null) }
+    var preparedSaveAsPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var saveMenuOpen by remember { mutableStateOf(false) }
     val editor = rememberRichTextController(); var editingLink by remember { mutableStateOf<EditorLink?>(null) }; var linkText by remember { mutableStateOf("") }; var linkUrl by remember { mutableStateOf("") }
     fun back() { if (direct) onBack() else picker() }
     fun build() {
@@ -101,13 +103,14 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
         previewPath = null
         editor.clear()
     }
-    fun saveTo(target: Uri) {
+    fun saveTo(target: Uri, source: File? = null, isNewDocument: Boolean = false) {
         if (busy) return
         busy = true
         message = null
         scope.launch {
             runCatching {
-                val source = previewPath?.let(::File)?.takeIf(File::exists)
+                val verifiedSource = source?.takeIf(File::exists)
+                    ?: previewPath?.let(::File)?.takeIf(File::exists)
                     ?: repository.buildPreview(
                         context.cacheDir,
                         PdfSpec(
@@ -118,11 +121,16 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                             scanPaths.map(::File),
                         ),
                     )
-                repository.save(source, target)
-                source
-            }.onSuccess { source ->
+                repository.save(
+                    verifiedSource,
+                    target,
+                    deleteNewDocumentOnFailure = isNewDocument,
+                )
+                verifiedSource
+            }.onSuccess { verifiedSource ->
                 busy = false
-                clearAfterSave(source)
+                preparedSaveAsPath = null
+                clearAfterSave(verifiedSource)
                 onCreated(target)
             }.onFailure {
                 busy = false
@@ -144,7 +152,47 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
 
     val output = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/pdf"),
-    ) { uri -> if (uri != null) saveTo(uri) }
+    ) { uri ->
+        val prepared = preparedSaveAsPath?.let(::File)?.takeIf(File::exists)
+        if (uri != null && prepared != null) {
+            // The expensive PDF/PDFBox work completed before the system
+            // created this destination, so this callback only copies a fully
+            // verified file.
+            saveTo(uri, prepared, isNewDocument = true)
+        } else if (uri == null) {
+            if (prepared?.path != previewPath) prepared?.delete()
+            preparedSaveAsPath = null
+        } else {
+            message = "Prepared PDF is no longer available. Try Save As again."
+        }
+    }
+    fun prepareSaveAs() {
+        if (busy) return
+        busy = true
+        message = null
+        scope.launch {
+            runCatching {
+                previewPath?.let(::File)?.takeIf(File::exists)
+                    ?: repository.buildPreview(
+                        context.cacheDir,
+                        PdfSpec(
+                            mode,
+                            title,
+                            editor.html().ifBlank { html },
+                            imageStrings.map(Uri::parse),
+                            scanPaths.map(::File),
+                        ),
+                    )
+            }.onSuccess { verifiedSource ->
+                preparedSaveAsPath = verifiedSource.path
+                busy = false
+                output.launch((title.ifBlank { if (editingUri == null) "New PDF" else "Edited PDF" }).pdfName())
+            }.onFailure {
+                busy = false
+                message = it.message ?: "Unable to prepare PDF"
+            }
+        }
+    }
     LaunchedEffect(mode) { if (mode == CreatePdfMode.IMAGES && imageStrings.isEmpty()) images.launch(arrayOf("image/*")); if (mode == CreatePdfMode.SCAN && scanPaths.isEmpty()) camera.launch(scanUri()) }
 
     val preview = previewPath?.let(::File)?.takeIf(File::exists)
@@ -166,7 +214,7 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                                 Text(if (busy) "Saving…" else "Save")
                             }
                             TextButton(
-                                onClick = { output.launch((title.ifBlank { "Edited PDF" }).pdfName()) },
+                                onClick = { prepareSaveAs() },
                                 enabled = !busy,
                             ) { Text("Save As") }
                         }
@@ -176,7 +224,7 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
             floatingActionButton = {
                 if (editingUri == null) {
                     ExtendedFloatingActionButton(
-                        onClick = { output.launch((title.ifBlank { "New PDF" }).pdfName()) },
+                        onClick = { prepareSaveAs() },
                         icon = { Icon(Icons.Default.Save, null) },
                         text = { Text(if (busy) "Saving…" else "Save PDF") },
                     )
@@ -202,17 +250,43 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                 },
                 actions = {
                     if (textMode) {
-                        if (editingUri != null) {
-                            IconButton(onClick = { saveTo(editingUri) }, enabled = !busy) {
-                                Icon(Icons.Default.Save, "Save")
-                            }
-                            TextButton(
-                                onClick = { output.launch((title.ifBlank { "Edited PDF" }).pdfName()) },
-                                enabled = !busy,
-                            ) { Text("Save As") }
+                        TextButton(onClick = { build() }, enabled = !busy) {
+                            Icon(Icons.Default.Visibility, null)
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (busy) "Working…" else "Preview")
                         }
-                        IconButton(onClick = { build() }, enabled = !busy) {
-                            Icon(Icons.Default.Visibility, "Preview")
+                        TextButton(
+                            onClick = {
+                                if (editingUri != null) saveTo(editingUri) else prepareSaveAs()
+                            },
+                            enabled = !busy,
+                        ) {
+                            Icon(Icons.Default.Save, null)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Save")
+                        }
+                        if (editingUri != null) {
+                            Box {
+                                IconButton(
+                                    onClick = { saveMenuOpen = true },
+                                    enabled = !busy,
+                                ) {
+                                    Icon(Icons.Default.MoreVert, "More save options")
+                                }
+                                DropdownMenu(
+                                    expanded = saveMenuOpen,
+                                    onDismissRequest = { saveMenuOpen = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Save As") },
+                                        leadingIcon = { Icon(Icons.Default.SaveAs, null) },
+                                        onClick = {
+                                            saveMenuOpen = false
+                                            prepareSaveAs()
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 },
