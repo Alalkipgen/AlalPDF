@@ -15,8 +15,8 @@ Untracked schema backup: `/data/alalpdf-backups/app-schemas-pre-v0.2.2.tgz`
 - [x] Fix Create Text PDF scroll lag/flash — compileDebugKotlin passed
 - [x] Fix duplicate hyperlink annotations — unit tests and compile passed
 - [x] Rewrite drag-selection hit testing and gesture updates — index tests and compile passed
-- [ ] Run debug build, unit tests, lintRelease, release build
-- [ ] Push branch and open PR
-- [ ] Poll CI every 60 seconds; inspect logs immediately on failure
-- [ ] Merge to main
-- [ ] Poll release workflow; download and verify APK
+- [x] Run builds/tests/lint — PR CI 35546555099 and main CI 35547042789 succeeded; local assembleRelease succeeded
+- [x] Push branch and open PR — PR #11
+- [x] Poll CI every 60 seconds — completed success
+- [x] Merge to main — f1ac2ad75d2efc6b23b21351e068f7d0aebf4e10
+- [x] Poll release workflow — run 35547042787 succeeded; APK verified as versionCode 6 / 0.2.2-beta
