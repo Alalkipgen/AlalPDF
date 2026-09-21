@@ -104,7 +104,6 @@ private fun AppRoot(
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
-    val appScope = rememberCoroutineScope()
     val libraryRepository = remember(appContext) { PdfLibraryRepository(appContext) }
     val deviceScan = remember(appContext) { DeviceScanRepository(appContext) }
     val prefs = remember(appContext) { LibraryPrefs(appContext) }
