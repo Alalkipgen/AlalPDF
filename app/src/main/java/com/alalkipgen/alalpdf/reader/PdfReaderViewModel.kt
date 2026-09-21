@@ -512,7 +512,6 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 .filter { abs(it - centerPage) > DISPLAY_DISTANCE }
                 .forEach { page ->
                     pages.remove(page)
-                    renderedWidths.remove(page)
                 }
         }
     }

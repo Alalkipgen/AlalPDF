@@ -1,18 +1,19 @@
-# Alal PDF v0.2.3-beta
+# Alal PDF v0.3.0-beta
 
 ## Fixes
 
-- PDFs created by Alal PDF now open in the real PDF Editor instead of returning to the Create screen. The editor offers **Save** for safe in-place replacement and **Save As** for a new file, and cleans temporary overlay resources on every success or failure path.
-- Whole-page Rewrite no longer crashes when the page text changes while the dialog is open.
-- Text and hyperlinks are laid out from an exclusive character slice per page. A bottom-page link can no longer be painted or annotated again on the following page; duplicate annotation hit targets are also filtered while reading.
-- Create Text PDF uses one native scroll owner for title and body without driving Compose top-bar layout on every pixel, removing reverse-scroll clipping and jank.
-- The reader fast-scroll thumb reacts immediately to a new gesture and stays below the top app bar.
-- Reader pages receive low-resolution readable previews across a wider prefetch window before expensive full-resolution rendering, reducing numbered white placeholders during scrolling.
+- Alal-created Text PDFs now reopen in the structured blank-page editor, with direct **Save** and **Save As** instead of the general overlay editor.
+- Reworked reader ownership: Android `PdfRenderer` renders pages, PDFium handles text geometry/search/links, and PDFBox is limited to short-lived encrypted unlock, metadata, creation, and editing work.
+- Reader memory is bounded by device capability, uses a three-page display window, renders only the focused page at full quality, and uses low-memory RGB_565 previews for neighboring pages.
+- Added direction-aware render priority, instant previous-page cache reuse, Android memory-pressure trimming, and an OOM-safe low-resolution fallback instead of an app crash.
+- Text selection and hyperlinks load lazily after scrolling settles, avoiding competition with page rendering and preventing long-lived duplicate PDF document models.
+- PDF hyperlink hit boxes now come from the same PDFium session as text selection, with URL validation, rotation handling, and duplicate filtering.
+- Alal-created PDF save paths preserve structured draft metadata so later edits remain Word/notes-style.
 
 ## Version
 
-- Version name: `0.2.3-beta`
-- Version code: `7`
+- Version name: `0.3.0-beta`
+- Version code: `8`
 - Minimum Android: Android 8.0 (API 26)
 
 Alal PDF works offline and does not request the Android `INTERNET` permission.

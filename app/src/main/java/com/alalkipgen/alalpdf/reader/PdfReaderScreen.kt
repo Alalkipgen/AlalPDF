@@ -196,9 +196,8 @@ fun PdfReaderScreen(
         onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
 
-    // Heavy text geometry and PDFBox link parsing wait until scrolling settles.
-    // This prevents three engines competing while PdfRenderer is producing the
-    // visible-page preview.
+    // PDFium text geometry and link parsing wait until scrolling settles, so
+    // they never compete with the visible-page preview.
     LaunchedEffect(listState, state.pageCount) {
         snapshotFlow {
             listState.isScrollInProgress to listState.firstVisibleItemIndex

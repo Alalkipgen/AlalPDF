@@ -63,6 +63,33 @@ internal class PdfiumTextSource private constructor(
         return buildString { runs.forEach { append(it.text) } }
     }
 
+    override fun pageLinks(page: Int): List<PdfPageLink> = runCatching {
+        synchronized(lock) {
+            document.openPage(page).use { pdfPage ->
+                val width = pdfPage.getPageWidthPoint().toFloat().coerceAtLeast(1f)
+                val height = pdfPage.getPageHeightPoint().toFloat().coerceAtLeast(1f)
+                pdfPage.getPageLinks().mapNotNull { link: PdfDocument.Link ->
+                    val url = link.uri?.trim()?.takeIf(::isSafeWebUrl) ?: return@mapNotNull null
+                    val box = link.bounds
+                    val left = minOf(box.left, box.right) / width
+                    val right = maxOf(box.left, box.right) / width
+                    val top = 1f - maxOf(box.top, box.bottom) / height
+                    val bottom = 1f - minOf(box.top, box.bottom) / height
+                    rotateLinkBounds(
+                        left.coerceIn(0f, 1f),
+                        top.coerceIn(0f, 1f),
+                        right.coerceIn(0f, 1f),
+                        bottom.coerceIn(0f, 1f),
+                        pdfPage.getPageRotation(),
+                        url,
+                    )
+                }.distinctBy { link ->
+                    listOf(link.url, link.left, link.top, link.right, link.bottom)
+                }
+            }
+        }
+    }.getOrDefault(emptyList())
+
     private fun readCharRuns(page: Int): List<PdfTextRun> = runCatching {
         document.openPage(page).use { pdfPage ->
             val width = pdfPage.getPageWidthPoint().toFloat()
@@ -110,6 +137,37 @@ internal class PdfiumTextSource private constructor(
         closed = true
         runCatching { document.close() }
         runCatching { descriptor.close() }
+    }
+
+    private fun isSafeWebUrl(value: String): Boolean {
+        val scheme = runCatching { Uri.parse(value).scheme?.lowercase() }.getOrNull()
+        return scheme == "http" || scheme == "https"
+    }
+
+    private fun rotateLinkBounds(
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        rotation: Int,
+        url: String,
+    ): PdfPageLink {
+        val points = listOf(left to top, right to top, left to bottom, right to bottom)
+            .map { (x, y) ->
+                when (((rotation % 360) + 360) % 360) {
+                    90 -> (1f - y) to x
+                    180 -> (1f - x) to (1f - y)
+                    270 -> y to (1f - x)
+                    else -> x to y
+                }
+            }
+        return PdfPageLink(
+            points.minOf { it.first },
+            points.minOf { it.second },
+            points.maxOf { it.first },
+            points.maxOf { it.second },
+            url,
+        )
     }
 
     companion object {

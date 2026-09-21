@@ -37,9 +37,7 @@ class PdfReaderRepository(private val context: Context) {
         }
 
     suspend fun pageLinks(uri: Uri, page: Int): List<PdfPageLink> = withContext(Dispatchers.IO) {
-        runCatching {
-            PdfLinkExtractor.extractPage(resolver, uri, page, readerSession(uri).password)
-        }.getOrDefault(emptyList())
+        runCatching { readerSession(uri).pageLinks(page) }.getOrDefault(emptyList())
     }
 
     /**
@@ -49,7 +47,7 @@ class PdfReaderRepository(private val context: Context) {
      * The platform renderer only exposes positioned text from API 35, which is
      * why selection never worked on normal devices. PDFBox reports a position
      * per glyph. PDFium is the normal reader text engine; PDFBox is not kept
-     * open beside the renderer.
+     * open beside the renderer. Link hit boxes use that same PDFium session.
      */
     suspend fun pageTextRuns(uri: Uri, page: Int): List<PdfTextRun> = withContext(Dispatchers.IO) {
         // PDFium first: it is the only source that gives a box per character,

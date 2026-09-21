@@ -35,6 +35,7 @@ internal interface PdfTextEngine : Closeable {
     fun charRuns(page: Int): List<PdfTextRun>
     fun pageText(page: Int): String
     fun pageSizePoints(page: Int): SizeF?
+    fun pageLinks(page: Int): List<PdfPageLink>
 }
 
 /**
@@ -86,6 +87,10 @@ internal class PdfDocumentSession private constructor(
 
     fun pageSizePoints(page: Int): SizeF? = synchronized(textLock) {
         if (closed) null else openTextEngine()?.pageSizePoints(page)
+    }
+
+    fun pageLinks(page: Int): List<PdfPageLink> = synchronized(textLock) {
+        if (closed) emptyList() else openTextEngine()?.pageLinks(page).orEmpty()
     }
 
     /** Release PDFium under memory pressure without disturbing the renderer. */

@@ -15,5 +15,5 @@ Backup: backup/pre-architecture-20260921-120741 and /data/alalpdf-backups/pre-ar
 - [x] P2 Structured editor for Alal-created text PDFs with Save / Save As — tests and compile passed
 - [x] P3 Reader memory, cache and render-queue rewrite — compile and unit tests passed
 - [x] P4 PDFium-first lazy text pipeline; removed persistent PDFBox reader index — compile and unit tests passed
-- [ ] P5 Cleanup, stress/unit tests, release verification
+- [x] P5 Cleanup, stress/unit tests, release verification — debug/release APK, unit tests and lint passed
 - [ ] PR CI green, merge, main CI/release green, APK verified
