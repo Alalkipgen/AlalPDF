@@ -82,7 +82,10 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
     editingUri: Uri? = null,
 ) {
     val context = LocalContext.current; val scope = rememberCoroutineScope(); val repository = remember(context) { CreatePdfRepository(context) }
-    var title by rememberSaveable { mutableStateOf(draft?.title.orEmpty()) }; var html by rememberSaveable { mutableStateOf(draft?.bodyHtml.orEmpty()) }
+    // Large rich-text bodies must stay out of SavedState. The fully verified
+    // temp PDF path below is the only state needed across the Save As picker.
+    var title by remember { mutableStateOf(draft?.title.orEmpty()) }
+    var html by remember { mutableStateOf(draft?.bodyHtml.orEmpty()) }
     var imageStrings by rememberSaveable {
         mutableStateOf(ArrayList(if (mode == CreatePdfMode.SCAN) emptyList() else draft?.images.orEmpty()))
     }

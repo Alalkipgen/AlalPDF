@@ -100,6 +100,7 @@ fun RichTextEditor(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 )
                 id = TITLE_EDITOR_ID
+                isSaveEnabled = false
                 setBackgroundColor(Color.TRANSPARENT)
                 setTextColor(color)
                 setHintTextColor(hintColor)
@@ -133,6 +134,10 @@ fun RichTextEditor(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 )
                 id = BODY_EDITOR_ID
+                // Compose already owns the live text. Saving this EditText's
+                // full Editable into the view hierarchy would add a third copy
+                // of a long document to the Activity result Bundle.
+                isSaveEnabled = false
                 setBackgroundColor(Color.TRANSPARENT)
                 setTextColor(color)
                 setHintTextColor(hintColor)
@@ -164,6 +169,7 @@ fun RichTextEditor(
                 isNestedScrollingEnabled = true
                 ViewCompat.setNestedScrollingEnabled(this, true)
                 clipToPadding = false
+                isSaveEnabled = false
                 addView(
                     LinearLayout(context).apply {
                         orientation = LinearLayout.VERTICAL
@@ -171,6 +177,7 @@ fun RichTextEditor(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.WRAP_CONTENT,
                         )
+                        isSaveEnabled = false
                         addView(titleEditor)
                         addView(editor)
                     },

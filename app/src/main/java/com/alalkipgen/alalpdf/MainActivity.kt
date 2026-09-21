@@ -124,9 +124,13 @@ private fun AppRoot(
     var folderUri by rememberSaveable { mutableStateOf<String?>(null) }
     var createMode by rememberSaveable { mutableStateOf<String?>(null) }
     var draftMode by rememberSaveable { mutableStateOf<String?>(null) }
-    var draftTitle by rememberSaveable { mutableStateOf("") }
-    var draftHtml by rememberSaveable { mutableStateOf("") }
-    var draftImages by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    // Draft bodies can span dozens of pages. Never place them (or a duplicate
+    // image list) in the Activity saved-state Bundle: opening ACTION_CREATE_DOCUMENT
+    // would marshal the whole body and could kill the Activity before the Save
+    // As result was delivered, leaving the provider's new document at 0 B.
+    var draftTitle by remember { mutableStateOf("") }
+    var draftHtml by remember { mutableStateOf("") }
+    var draftImages by remember { mutableStateOf(arrayListOf<String>()) }
     var createSession by rememberSaveable { mutableStateOf(0) }
     var readerSession by rememberSaveable { mutableStateOf(0) }
 
