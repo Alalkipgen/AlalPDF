@@ -21,10 +21,10 @@ import java.io.Closeable
  * Boxes are returned in normalized page coordinates (0..1, origin top-left) so
  * the overlay does not care about the zoom level or the rendered size.
  */
-class PdfiumTextSource private constructor(
+internal class PdfiumTextSource private constructor(
     private val document: PdfDocument,
     private val descriptor: ParcelFileDescriptor,
-) : Closeable {
+) : PdfTextEngine {
 
     private val lock = Any()
     private val runCache = LruCache<Int, List<PdfTextRun>>(CACHE_PAGES)
@@ -32,11 +32,11 @@ class PdfiumTextSource private constructor(
     @Volatile
     private var closed = false
 
-    val pageCount: Int
+    override val pageCount: Int
         get() = if (closed) 0 else runCatching { document.getPageCount() }.getOrDefault(0)
 
     /** One run per character, in reading order, with normalized coordinates. */
-    fun charRuns(page: Int): List<PdfTextRun> {
+    override fun charRuns(page: Int): List<PdfTextRun> {
         if (closed || page < 0) return emptyList()
         runCache.get(page)?.let { return it }
         val runs = synchronized(lock) { readCharRuns(page) }
@@ -45,7 +45,7 @@ class PdfiumTextSource private constructor(
     }
 
     /** Page size in PDF points, or null when the page cannot be opened. */
-    fun pageSizePoints(page: Int): android.util.SizeF? = runCatching {
+    override fun pageSizePoints(page: Int): android.util.SizeF? = runCatching {
         synchronized(lock) {
             document.openPage(page).use { pdfPage ->
                 android.util.SizeF(
@@ -57,7 +57,7 @@ class PdfiumTextSource private constructor(
     }.getOrNull()
 
     /** Page text in the same order as [charRuns]. */
-    fun pageText(page: Int): String {
+    override fun pageText(page: Int): String {
         val runs = charRuns(page)
         if (runs.isEmpty()) return ""
         return buildString { runs.forEach { append(it.text) } }
@@ -117,6 +117,17 @@ class PdfiumTextSource private constructor(
 
         fun open(context: Context, uri: Uri, password: String?): PdfiumTextSource? = runCatching {
             val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
+            open(context, descriptor, password) ?: run {
+                descriptor.close()
+                null
+            }
+        }.getOrNull()
+
+        fun open(
+            context: Context,
+            descriptor: ParcelFileDescriptor,
+            password: String?,
+        ): PdfiumTextSource? = runCatching {
             val core = PdfiumCore(context)
             val document = if (password.isNullOrEmpty()) {
                 core.newDocument(descriptor)
@@ -124,6 +135,9 @@ class PdfiumTextSource private constructor(
                 core.newDocument(descriptor, password)
             }
             PdfiumTextSource(document, descriptor)
-        }.getOrNull()
+        }.getOrElse {
+            runCatching { descriptor.close() }
+            null
+        }
     }
 }
