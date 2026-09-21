@@ -1,18 +1,17 @@
-# Alal PDF v0.3.1-beta
+# Alal PDF v0.3.2-beta
 
 ## Fixes
 
-- **Save As** now builds and verifies the complete PDF before opening Android's file picker. Failed writes remove new zero-byte placeholders without ever deleting an existing document.
-- Document-provider writes retry safe truncate modes and verify both the PDF header and page count before reporting success.
-- Alal-created PDFs store exact hyperlink URLs and normalized hit boxes in document metadata. Older Alal PDFs and external PDFs use a short-lived annotation compatibility reader.
-- Leaving the reader for the structured editor explicitly closes its renderer and text engines, preventing the native-memory spike that could terminate the app during Save As.
-- Create Text PDF now shows labeled **Preview** and **Save** actions. Edit mode keeps **Save As** in the additional save menu.
-- Low-resolution previews remain fast while scrolling; after scrolling settles, the focused page is immediately promoted ahead of neighbor work for crisp text.
+- The reader now focuses the page occupying the largest visible area instead of the first list item. Partially visible hyperlink pages receive full-quality rendering and active link hit boxes without requiring zoom.
+- Text and links load for every page currently visible on screen, so hyperlinks work across page boundaries.
+- Readable RGB_565 previews are retained in the bounded cache, preventing revisited pages from falling back to a white page-number placeholder.
+- **Save As** uses `ContentResolver.openOutputStream()` instead of double-owning a raw file descriptor, and no longer opens a second PDFBox document immediately after writing. This removes the native crash/0-byte-file path.
+- Image, Text + Image, and Scan PDFs created by Alal now reopen in their matching Create UI. Image/scan pages are reconstructed as temporary editable assets when original source URIs are unavailable.
 
 ## Version
 
-- Version name: `0.3.1-beta`
-- Version code: `9`
+- Version name: `0.3.2-beta`
+- Version code: `10`
 - Minimum Android: Android 8.0 (API 26)
 
 Alal PDF works offline and does not request the Android `INTERNET` permission.

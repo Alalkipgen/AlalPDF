@@ -171,7 +171,19 @@ fun PdfReaderScreen(
     // Zoom is applied to the *content width* instead of a graphics layer.
     var scale by remember { mutableFloatStateOf(1f) }
 
-    val visiblePage by remember { derivedStateOf { listState.firstVisibleItemIndex } }
+    val visiblePage by remember {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            mostVisiblePage(
+                layout.viewportStartOffset,
+                layout.viewportEndOffset,
+                layout.visibleItemsInfo.map {
+                    VisiblePageBounds(it.index, it.offset, it.size)
+                },
+                listState.firstVisibleItemIndex,
+            )
+        }
+    }
     val lastIndex = (state.pageCount - 1).coerceAtLeast(0)
     val nightColorFilter = remember(nightMode) {
         if (!nightMode) null else ColorFilter.colorMatrix(
@@ -201,13 +213,19 @@ fun PdfReaderScreen(
     // they never compete with the visible-page preview.
     LaunchedEffect(listState, state.pageCount) {
         snapshotFlow {
-            listState.isScrollInProgress to listState.firstVisibleItemIndex
-        }.distinctUntilChanged().collectLatest { (scrolling, page) ->
+            val layout = listState.layoutInfo
+            val visible = layout.visibleItemsInfo.map { it.index }.distinct()
+            Triple(listState.isScrollInProgress, visiblePage, visible)
+        }.distinctUntilChanged().collectLatest { (scrolling, page, visiblePages) ->
             if (!scrolling && state.pageCount > 0) {
                 delay(SETTLED_EXTRACTION_DELAY_MS)
                 onPromotePage(page)
-                onRequestPageText(page)
-                onRequestPageLinks(page)
+                // Links must work on every page the user can tap, not only the
+                // first list item (which may be a few remaining pixels).
+                visiblePages.forEach { visible ->
+                    onRequestPageText(visible)
+                    onRequestPageLinks(visible)
+                }
             }
         }
     }
@@ -228,7 +246,7 @@ fun PdfReaderScreen(
         }
     }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex }
+        snapshotFlow { visiblePage }
             .distinctUntilChanged()
             .collect { onPageSelected(it) }
     }

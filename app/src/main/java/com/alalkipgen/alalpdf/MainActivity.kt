@@ -272,10 +272,7 @@ private fun AppRoot(
                         val draft = runCatching {
                             CreatePdfRepository(appContext).readDraft(Uri.parse(current))
                         }.getOrNull()
-                        if (draft != null &&
-                            (draft.mode == CreatePdfMode.TEXT ||
-                                draft.mode == CreatePdfMode.IMAGE_TEXT)
-                        ) {
+                        if (draft != null) {
                             draftMode = draft.mode.name
                             draftTitle = draft.title
                             draftHtml = draft.bodyHtml

@@ -83,7 +83,23 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
 ) {
     val context = LocalContext.current; val scope = rememberCoroutineScope(); val repository = remember(context) { CreatePdfRepository(context) }
     var title by rememberSaveable { mutableStateOf(draft?.title.orEmpty()) }; var html by rememberSaveable { mutableStateOf(draft?.bodyHtml.orEmpty()) }
-    var imageStrings by rememberSaveable { mutableStateOf(ArrayList(draft?.images.orEmpty())) }; var scanPaths by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var imageStrings by rememberSaveable {
+        mutableStateOf(ArrayList(if (mode == CreatePdfMode.SCAN) emptyList() else draft?.images.orEmpty()))
+    }
+    var scanPaths by rememberSaveable {
+        mutableStateOf(
+            ArrayList(
+                if (mode == CreatePdfMode.SCAN) {
+                    draft?.images.orEmpty().mapNotNull { value ->
+                        val uri = Uri.parse(value)
+                        uri.path?.takeIf { uri.scheme == "file" } ?: value
+                    }
+                } else {
+                    emptyList()
+                },
+            ),
+        )
+    }
     var pendingScan by rememberSaveable{mutableStateOf<String?>(null)}; var previewPath by rememberSaveable { mutableStateOf<String?>(null) }; var busy by rememberSaveable { mutableStateOf(false) }; var message by rememberSaveable { mutableStateOf<String?>(null) }
     var preparedSaveAsPath by rememberSaveable { mutableStateOf<String?>(null) }
     var saveMenuOpen by remember { mutableStateOf(false) }
@@ -193,7 +209,16 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
             }
         }
     }
-    LaunchedEffect(mode) { if (mode == CreatePdfMode.IMAGES && imageStrings.isEmpty()) images.launch(arrayOf("image/*")); if (mode == CreatePdfMode.SCAN && scanPaths.isEmpty()) camera.launch(scanUri()) }
+    LaunchedEffect(mode) {
+        // Existing Alal documents already have reconstructed page assets.
+        // Never open a picker/camera automatically while entering edit mode.
+        if (draft == null && mode == CreatePdfMode.IMAGES && imageStrings.isEmpty()) {
+            images.launch(arrayOf("image/*"))
+        }
+        if (draft == null && mode == CreatePdfMode.SCAN && scanPaths.isEmpty()) {
+            camera.launch(scanUri())
+        }
+    }
 
     val preview = previewPath?.let(::File)?.takeIf(File::exists)
     if (preview != null) {
@@ -242,7 +267,12 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
                 title = {
                     Text(
                         when {
-                            editingUri != null -> "Edit Text PDF"
+                            editingUri != null -> when (mode) {
+                                CreatePdfMode.TEXT -> "Edit Text PDF"
+                                CreatePdfMode.IMAGE_TEXT -> "Edit Text + Image PDF"
+                                CreatePdfMode.IMAGES -> "Edit Image PDF"
+                                CreatePdfMode.SCAN -> "Edit Scanned PDF"
+                            }
                             textMode -> "Create Text PDF"
                             else -> "Create PDF"
                         },

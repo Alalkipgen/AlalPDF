@@ -461,7 +461,9 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 val previewReady = runCatching {
                     repository.renderPreview(request.uri, request.page, PREVIEW_WIDTH_PX)
                 }.onSuccess { preview ->
-                    publish(request.page, preview, PREVIEW_WIDTH_PX, request.generation, cache = false)
+                    // Keep the readable preview so revisiting a page never
+                    // falls back to a page number while full quality catches up.
+                    publish(request.page, preview, PREVIEW_WIDTH_PX, request.generation, cache = true)
                 }
                     .onFailure { error -> if (error is CancellationException) throw error }
                     .isSuccess
@@ -506,7 +508,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 bitmap,
                 FALLBACK_PREVIEW_WIDTH_PX,
                 request.generation,
-                cache = false,
+                cache = true,
             )
         }
     }

@@ -3,6 +3,7 @@ package com.alalkipgen.alalpdf.create
 import android.content.Context
 import android.graphics.*
 import android.graphics.pdf.PdfDocument
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.text.Layout
 import android.text.StaticLayout
@@ -64,16 +65,13 @@ class CreatePdfRepository(private val context: Context) {
             var written = false
             for (mode in OUTPUT_MODES) {
                 val attempt = runCatching {
-                    val descriptor = resolver.openFileDescriptor(output, mode)
-                        ?: error("Document provider returned no file descriptor")
-                    descriptor.use { pfd ->
-                        FileOutputStream(pfd.fileDescriptor).use { out ->
-                            FileInputStream(source).use { input -> input.copyTo(out) }
-                            out.flush()
-                            runCatching { out.fd.sync() }
-                        }
-                        pfd.checkError()
+                    val outputStream = resolver.openOutputStream(output, mode)
+                        ?: error("Document provider returned no output stream")
+                    val copied = outputStream.use { out ->
+                        FileInputStream(source).use { input -> input.copyTo(out) }
+                            .also { out.flush() }
                     }
+                    check(copied == source.length()) { "The saved file is incomplete" }
                 }
                 if (attempt.isSuccess) {
                     written = true
@@ -88,9 +86,10 @@ class CreatePdfRepository(private val context: Context) {
                     "The saved file is incomplete"
                 }
             } ?: error("Unable to verify saved PDF")
-            resolver.openInputStream(output)?.use { input ->
-                PDDocument.load(input).use { check(it.numberOfPages > 0) }
-            } ?: error("Unable to verify saved PDF")
+            // The cache source was already fully parsed and verified. Avoid
+            // loading a second PDFBox document immediately after the picker:
+            // that native-memory spike caused process death and left 0 B SAF
+            // placeholders on some devices.
             runCatching {
                 resolver.takePersistableUriPermission(output, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             }
@@ -243,12 +242,96 @@ class CreatePdfRepository(private val context: Context) {
     }
     suspend fun readDraft(uri: Uri): PdfDraft? = withContext(Dispatchers.IO) {
         PDFBoxResourceLoader.init(context)
-        resolver.openInputStream(uri)?.use { input -> PDDocument.load(input).use { doc ->
-            val info=doc.documentInformation
-            if(info.getCustomMetadataValue("AlalPDF-Version")==null) return@withContext null
-            fun decode(k:String)=info.getCustomMetadataValue(k)?.let{String(Base64.decode(it,Base64.NO_WRAP),Charsets.UTF_8)}.orEmpty()
-            PdfDraft(runCatching{CreatePdfMode.valueOf(info.getCustomMetadataValue("AlalPDF-Mode")?:"TEXT")}.getOrDefault(CreatePdfMode.TEXT),decode("AlalPDF-Title"),decode("AlalPDF-Body"),decode("AlalPDF-Images").lines().filter(String::isNotBlank))
-        }}
+        val loaded = resolver.openInputStream(uri)?.use { input ->
+            PDDocument.load(input).use { doc ->
+                val info = doc.documentInformation
+                if (info.getCustomMetadataValue("AlalPDF-Version") == null) {
+                    return@withContext null
+                }
+                fun decode(key: String) = info.getCustomMetadataValue(key)?.let {
+                    String(Base64.decode(it, Base64.NO_WRAP), Charsets.UTF_8)
+                }.orEmpty()
+                DraftReadResult(
+                    mode = runCatching {
+                        CreatePdfMode.valueOf(
+                            info.getCustomMetadataValue("AlalPDF-Mode") ?: "TEXT",
+                        )
+                    }.getOrDefault(CreatePdfMode.TEXT),
+                    title = decode("AlalPDF-Title"),
+                    body = decode("AlalPDF-Body"),
+                    originalImages = decode("AlalPDF-Images").lines().filter(String::isNotBlank),
+                    textPageCount = info.getCustomMetadataValue("AlalPDF-PageCount")
+                        ?.toIntOrNull()
+                        ?.coerceIn(0, doc.numberOfPages)
+                        ?: 0,
+                )
+            }
+        } ?: return@withContext null
+
+        val editableImages = when (loaded.mode) {
+            CreatePdfMode.TEXT -> emptyList()
+            CreatePdfMode.IMAGE_TEXT ->
+                renderDraftPages(uri, loaded.textPageCount).ifEmpty { loaded.originalImages }
+            CreatePdfMode.IMAGES,
+            CreatePdfMode.SCAN,
+            -> renderDraftPages(uri, 0).ifEmpty { loaded.originalImages }
+        }
+        PdfDraft(loaded.mode, loaded.title, loaded.body, editableImages)
+    }
+
+    /**
+     * Original image URIs may have expired and scans are intentionally removed
+     * after saving. Reconstruct only the image/scan pages as local edit assets,
+     * so every Alal creation mode can reopen in its original Create UI.
+     */
+    private fun renderDraftPages(uri: Uri, firstPage: Int): List<String> {
+        val root = File(context.cacheDir, "edit-page-assets").apply { mkdirs() }
+        root.listFiles()
+            ?.filter { System.currentTimeMillis() - it.lastModified() > EDIT_ASSET_MAX_AGE_MS }
+            ?.forEach(File::deleteRecursively)
+        val outputDir = File(root, "draft-${System.nanoTime()}").apply { mkdirs() }
+        val descriptor = resolver.openFileDescriptor(uri, "r") ?: return emptyList()
+        val renderer = runCatching { PdfRenderer(descriptor) }
+            .getOrElse {
+                descriptor.close()
+                outputDir.deleteRecursively()
+                return emptyList()
+            }
+        return try {
+            buildList {
+                for (index in firstPage.coerceAtLeast(0) until renderer.pageCount) {
+                    renderer.openPage(index).use { page ->
+                        val width = EDIT_PAGE_WIDTH_PX
+                        val height = (width.toFloat() * page.height / page.width)
+                            .toInt()
+                            .coerceAtLeast(1)
+                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                        try {
+                            bitmap.eraseColor(Color.WHITE)
+                            page.render(
+                                bitmap,
+                                null,
+                                null,
+                                PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY,
+                            )
+                            val file = File(outputDir, "page-${index + 1}.jpg")
+                            FileOutputStream(file).use { stream ->
+                                check(bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream))
+                            }
+                            add(Uri.fromFile(file).toString())
+                        } finally {
+                            bitmap.recycle()
+                        }
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            outputDir.deleteRecursively()
+            emptyList()
+        } finally {
+            renderer.close()
+            runCatching { descriptor.close() }
+        }
     }
     private fun finalizePdf(file: File, links: List<PdfLink>, spec: PdfSpec) {
         PDFBoxResourceLoader.init(context); val temp = File(file.parentFile, file.nameWithoutExtension + "-links.pdf")
@@ -295,10 +378,20 @@ class CreatePdfRepository(private val context: Context) {
 
     private companion object {
         val OUTPUT_MODES = arrayOf("rwt", "wt", "w")
+        const val EDIT_PAGE_WIDTH_PX = 1_200
+        const val EDIT_ASSET_MAX_AGE_MS = 24L * 60L * 60L * 1_000L
         val TITLE_SIZES = floatArrayOf(24f, 20f, 18f)
         const val TITLE_MAX_LINES = 3
         const val TITLE_GAP = 16f
     }
+
+    private data class DraftReadResult(
+        val mode: CreatePdfMode,
+        val title: String,
+        val body: String,
+        val originalImages: List<String>,
+        val textPageCount: Int,
+    )
 }
 
 internal fun trimLinkEnd(text: CharSequence, start: Int, rawEnd: Int): Int {
