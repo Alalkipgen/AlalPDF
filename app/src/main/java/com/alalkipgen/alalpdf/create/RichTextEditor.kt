@@ -18,12 +18,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
 import androidx.core.text.HtmlCompat
 import androidx.core.view.ViewCompat
 import androidx.core.widget.NestedScrollView
@@ -84,7 +82,6 @@ fun RichTextEditor(
     controller: RichTextController,
     modifier: Modifier,
     onLongLink: (EditorLink) -> Unit,
-    onScroll: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val uri = LocalUriHandler.current
@@ -94,11 +91,8 @@ fun RichTextEditor(
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
     val pyidaungsu=remember(context){PyidaungsuFonts.regular(context)}
-    val latestScroll by rememberUpdatedState(onScroll)
-    // The editor lives in a NestedScrollView, so this interop connection is what
-    // lets its scrolling drive the collapsing top app bar above it.
     AndroidView(
-        modifier = modifier.nestedScroll(rememberNestedScrollInteropConnection()),
+        modifier = modifier,
         factory = {
             val titleEditor = EditText(context).apply {
                 layoutParams = LinearLayout.LayoutParams(
@@ -166,7 +160,6 @@ fun RichTextEditor(
                 // Title and body have one scroll owner. This avoids resizing an
                 // AndroidView from Compose on every scroll pixel, which caused
                 // a relayout feedback loop, flashing and dropped frames.
-                setOnScrollChangeListener { _: View, _: Int, y: Int, _: Int, _: Int -> latestScroll(y) }
                 isFillViewport = true
                 isNestedScrollingEnabled = true
                 ViewCompat.setNestedScrollingEnabled(this, true)

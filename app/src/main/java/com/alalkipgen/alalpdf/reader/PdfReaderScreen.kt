@@ -102,6 +102,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -220,7 +221,11 @@ fun PdfReaderScreen(
             .collect { onPageSelected(it) }
     }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+        // collectLatest is important here: when a new drag starts it cancels
+        // the pending hide delay immediately. The old collect blocked inside
+        // delay(2000), so quick follow-up scrolls were ignored and the thumb
+        // sometimes appeared many pages late.
+        snapshotFlow { listState.isScrollInProgress }.collectLatest { scrolling ->
             if (scrolling) {
                 chromeVisible = true
             } else {
@@ -611,7 +616,10 @@ fun PdfReaderScreen(
 
             if (state.pageCount > 1) {
                 val thumbHeight = 56.dp
-                val trackHeight = (viewportHeight - thumbHeight).coerceAtLeast(0.dp)
+                val trackTop = if (fullScreen) 12.dp else readerTopInset + 12.dp
+                val trackBottom = 12.dp
+                val trackHeight =
+                    (viewportHeight - trackTop - trackBottom - thumbHeight).coerceAtLeast(0.dp)
                 val fraction = if (thumbDragging) {
                     dragFraction
                 } else if (lastIndex == 0) {
@@ -625,7 +633,7 @@ fun PdfReaderScreen(
                     exit = fadeOut(),
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .offset(y = trackHeight * fraction),
+                        .offset(y = trackTop + trackHeight * fraction),
                 ) {
                     Surface(
                         shape = MaterialTheme.shapes.large,

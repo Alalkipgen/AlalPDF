@@ -392,12 +392,31 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
             if (request.generation != generation || request.uri.toString() != loadedUri) continue
             if (pages[request.page] != null && (renderedWidths[request.page] ?: 0) >= request.width) continue
 
-            // Pass one: a cheap render so something legible appears immediately
-            // instead of the numbered placeholder.
+            // Pass one: publish a cheap but readable preview, then put the
+            // expensive full-width request at the back of the visible-window
+            // queue. Previously each page finished its full render before the
+            // next page got even a preview, producing white placeholders while
+            // scrolling.
             if ((renderedWidths[request.page] ?: 0) == 0 && request.width > PREVIEW_WIDTH_PX) {
-                runCatching { repository.render(request.uri, request.page, PREVIEW_WIDTH_PX) }
-                    .onSuccess { preview -> publish(request.page, preview, PREVIEW_WIDTH_PX, request.generation, cache = false) }
+                val previewReady = runCatching {
+                    repository.render(request.uri, request.page, PREVIEW_WIDTH_PX)
+                }.onSuccess { preview ->
+                    publish(request.page, preview, PREVIEW_WIDTH_PX, request.generation, cache = false)
+                }
                     .onFailure { error -> if (error is CancellationException) throw error }
+                    .isSuccess
+                if (previewReady) {
+                    synchronized(queueLock) {
+                        enqueueLocked(
+                            request.uri,
+                            request.page,
+                            request.width,
+                            request.generation,
+                            FULL_RENDER_PRIORITY + request.priority,
+                        )
+                    }
+                    continue
+                }
             }
 
             // Pass two: the real render.
@@ -454,12 +473,13 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
     private companion object {
         /** How many pages around the current one stay mounted. */
-        const val DISPLAY_DISTANCE = 3
+        const val DISPLAY_DISTANCE = 5
 
         /** How many of those are rendered at full width. */
         const val FULL_QUALITY_DISTANCE = 1
 
-        const val PREVIEW_WIDTH_PX = 360
+        const val PREVIEW_WIDTH_PX = 420
         const val MAX_RENDER_WIDTH_PX = 1_400
+        const val FULL_RENDER_PRIORITY = 100
     }
 }
