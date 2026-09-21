@@ -1,7 +1,9 @@
 package com.alalkipgen.alalpdf.reader
 
 import android.app.ActivityManager
+import android.content.ComponentCallbacks2
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.runtime.mutableStateMapOf
@@ -88,6 +90,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     val uiState: StateFlow<PdfReaderUiState> = _uiState.asStateFlow()
 
     private lateinit var cache: BitmapPageCache
+    private var applicationContext: Context? = null
+    private var maxRenderWidth = 1_200
     private val renderedWidths = ConcurrentHashMap<Int, Int>()
     private val queueLock = Any()
     private val queue = PriorityQueue<RenderRequest>(compareBy<RenderRequest> { it.priority }.thenBy { it.order })
@@ -101,6 +105,20 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     @Volatile private var generation = 0
     @Volatile private var loadedUri: String? = null
     @Volatile private var focusedPage = 0
+    @Volatile private var scrollDirection = 1
+
+    private val memoryCallbacks = object : ComponentCallbacks2 {
+        override fun onConfigurationChanged(newConfig: Configuration) = Unit
+        override fun onLowMemory() = releaseMemory(critical = true)
+        override fun onTrimMemory(level: Int) {
+            when {
+                level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ->
+                    releaseMemory(critical = true)
+                level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ->
+                    releaseMemory(critical = false)
+            }
+        }
+    }
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -110,8 +128,15 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
     fun initialize(context: Context) {
         if (!::cache.isInitialized) {
-            val memoryClass = (context.getSystemService(ActivityManager::class.java)?.memoryClass ?: 128) * 1024 * 1024
-            cache = BitmapPageCache(memoryClass / 4)
+            val appContext = context.applicationContext
+            val activityManager = appContext.getSystemService(ActivityManager::class.java)
+            val lowRam = activityManager?.isLowRamDevice == true
+            cache = BitmapPageCache(
+                ReaderMemoryPolicy.cacheBudgetBytes(Runtime.getRuntime().maxMemory(), lowRam)
+            )
+            maxRenderWidth = ReaderMemoryPolicy.maxRenderWidth(lowRam)
+            applicationContext = appContext
+            appContext.registerComponentCallbacks(memoryCallbacks)
         }
     }
 
@@ -330,6 +355,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     private fun requestWindow(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int) {
+        scrollDirection = (pageIndex - focusedPage).coerceIn(-1, 1).takeIf { it != 0 } ?: scrollDirection
         focusedPage = pageIndex
         pruneDisplayedPages(pageIndex)
         synchronized(queueLock) {
@@ -340,13 +366,12 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 queue.removeAll(stale.toSet())
                 stale.forEach { queuedPages.remove(it.generation to it.page) }
             }
-            // Nearest pages first: 0, +1, -1, +2, -2, ...
-            val order = ArrayList<Int>()
-            order.add(pageIndex)
-            for (offset in 1..DISPLAY_DISTANCE) {
-                order.add(pageIndex + offset)
-                order.add(pageIndex - offset)
-            }
+            val order = ReaderMemoryPolicy.renderOrder(
+                pageIndex,
+                _uiState.value.pageCount,
+                DISPLAY_DISTANCE,
+                scrollDirection,
+            )
             order.forEachIndexed { priority, page ->
                 val distance = abs(page - pageIndex)
                 enqueueLocked(uri, page, widthFor(distance, width), expectedGeneration, priority)
@@ -355,11 +380,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         wakeUp.trySend(Unit)
     }
 
-    /**
-     * Only the focused page and its immediate neighbours are worth a full-width
-     * render. Anything further out gets the cheap pass, which keeps a +/-3 page
-     * window affordable: seven full ARGB pages at 1400 px would be ~56 MB.
-     */
+    /** Only the focused page is worth a full-width ARGB render. */
     private fun widthFor(distance: Int, width: Int): Int =
         if (distance <= FULL_QUALITY_DISTANCE) renderWidth(width) else PREVIEW_WIDTH_PX
 
@@ -399,7 +420,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
             // scrolling.
             if ((renderedWidths[request.page] ?: 0) == 0 && request.width > PREVIEW_WIDTH_PX) {
                 val previewReady = runCatching {
-                    repository.render(request.uri, request.page, PREVIEW_WIDTH_PX)
+                    repository.renderPreview(request.uri, request.page, PREVIEW_WIDTH_PX)
                 }.onSuccess { preview ->
                     publish(request.page, preview, PREVIEW_WIDTH_PX, request.generation, cache = false)
                 }
@@ -420,9 +441,34 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
             }
 
             // Pass two: the real render.
-            runCatching { repository.render(request.uri, request.page, request.width) }
+            runCatching {
+                if (request.width <= PREVIEW_WIDTH_PX) {
+                    repository.renderPreview(request.uri, request.page, request.width)
+                } else {
+                    repository.render(request.uri, request.page, request.width)
+                }
+            }
                 .onSuccess { bitmap -> publish(request.page, bitmap, request.width, request.generation, cache = true) }
-                .onFailure { error -> if (error is CancellationException) throw error }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    if (error is OutOfMemoryError) recoverFromOutOfMemory(request)
+                }
+        }
+    }
+
+    private suspend fun recoverFromOutOfMemory(request: RenderRequest) {
+        releaseMemory(critical = true)
+        if (request.generation != generation || request.page != focusedPage) return
+        runCatching {
+            repository.renderPreview(request.uri, request.page, FALLBACK_PREVIEW_WIDTH_PX)
+        }.onSuccess { bitmap ->
+            publish(
+                request.page,
+                bitmap,
+                FALLBACK_PREVIEW_WIDTH_PX,
+                request.generation,
+                cache = false,
+            )
         }
     }
 
@@ -453,7 +499,22 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
-    private fun renderWidth(width: Int): Int = width.coerceIn(1, MAX_RENDER_WIDTH_PX)
+    private fun renderWidth(width: Int): Int = width.coerceIn(1, maxRenderWidth)
+
+    private fun releaseMemory(critical: Boolean) {
+        if (!::cache.isInitialized) return
+        if (critical) cache.clear() else cache.trimToBytes(CACHE_LOW_MEMORY_BYTES)
+        repository.trimMemory()
+        if (critical) {
+            Snapshot.withMutableSnapshot {
+                pages.keys.filter { it != focusedPage }.forEach { page ->
+                    pages.remove(page)
+                    renderedWidths.remove(page)
+                }
+                thumbnails.clear()
+            }
+        }
+    }
 
     override fun onCleared() {
         generation++
@@ -463,6 +524,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         Snapshot.withMutableSnapshot { pages.clear(); thumbnails.clear(); pageAspectRatios.clear() }
         if (::cache.isInitialized) cache.clear()
         repository.close()
+        applicationContext?.unregisterComponentCallbacks(memoryCallbacks)
+        applicationContext = null
         super.onCleared()
     }
 
@@ -473,13 +536,14 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
     private companion object {
         /** How many pages around the current one stay mounted. */
-        const val DISPLAY_DISTANCE = 5
+        const val DISPLAY_DISTANCE = 2
 
         /** How many of those are rendered at full width. */
-        const val FULL_QUALITY_DISTANCE = 1
+        const val FULL_QUALITY_DISTANCE = 0
 
         const val PREVIEW_WIDTH_PX = 420
-        const val MAX_RENDER_WIDTH_PX = 1_400
+        const val FALLBACK_PREVIEW_WIDTH_PX = 280
+        const val CACHE_LOW_MEMORY_BYTES = 4 * 1024 * 1024
         const val FULL_RENDER_PRIORITY = 100
     }
 }

@@ -27,6 +27,10 @@ class PdfReaderRepository(private val context: Context) {
         readerSession(uri).render(page, width)
     }
 
+    suspend fun renderPreview(uri: Uri, page: Int, width: Int): Bitmap = withContext(Dispatchers.IO) {
+        readerSession(uri).render(page, width, Bitmap.Config.RGB_565)
+    }
+
     /** Cheap RGB_565 thumbnail, memoized in memory and on disk. */
     suspend fun thumbnail(uri: Uri, page: Int, width: Int = THUMBNAIL_WIDTH_PX): Bitmap =
         withContext(Dispatchers.IO) {
@@ -127,6 +131,11 @@ class PdfReaderRepository(private val context: Context) {
         thumbnails?.clearMemory()
         thumbnails = null
         thumbnailsUri = null
+    }
+
+    fun trimMemory() {
+        synchronized(sessionLock) { session?.trimTextEngine() }
+        thumbnails?.clearMemory()
     }
 
     private fun readerSession(uri: Uri, password: String? = session?.password): PdfDocumentSession {

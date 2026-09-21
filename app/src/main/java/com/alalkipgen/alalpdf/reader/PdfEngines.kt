@@ -88,6 +88,12 @@ internal class PdfDocumentSession private constructor(
         if (closed) null else openTextEngine()?.pageSizePoints(page)
     }
 
+    /** Release PDFium under memory pressure without disturbing the renderer. */
+    fun trimTextEngine() = synchronized(textLock) {
+        runCatching { textEngine?.close() }
+        textEngine = null
+    }
+
     private fun openTextEngine(): PdfTextEngine? {
         textEngine?.let { return it }
         val opened = if (unlockedFile != null) {
