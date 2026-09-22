@@ -22,6 +22,17 @@ internal object ReaderMemoryPolicy {
     fun maxRenderWidth(lowRamDevice: Boolean): Int = if (lowRamDevice) 900 else 1_200
 
     /**
+     * Most phone portrait widths are already close to the capped landscape
+     * width. Render them at the stable cap once so rotation can reuse the same
+     * bitmap instead of showing another loading pass.
+     */
+    fun stableRenderWidth(requestedWidth: Int, maxWidth: Int): Int {
+        val safeMax = maxWidth.coerceAtLeast(1)
+        val capped = requestedWidth.coerceIn(1, safeMax)
+        return if (capped >= safeMax * 2 / 3) safeMax else capped
+    }
+
+    /**
      * Current page first, then the side the user is moving toward.
      */
     fun renderOrder(center: Int, pageCount: Int, distance: Int, direction: Int): List<Int> {

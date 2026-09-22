@@ -46,4 +46,16 @@ class ReaderMemoryPolicyTest {
         )
         assertEquals(42, order.first())
     }
+
+    @Test
+    fun stableRenderWidth_reusesPhoneBitmapAcrossRotation() {
+        assertEquals(1_200, ReaderMemoryPolicy.stableRenderWidth(1_080, 1_200))
+        assertEquals(1_200, ReaderMemoryPolicy.stableRenderWidth(2_000, 1_200))
+        assertEquals(900, ReaderMemoryPolicy.stableRenderWidth(800, 900))
+    }
+
+    @Test
+    fun stableRenderWidth_doesNotOversizeNarrowWindows() {
+        assertEquals(500, ReaderMemoryPolicy.stableRenderWidth(500, 1_200))
+    }
 }

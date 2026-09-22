@@ -6,9 +6,29 @@ import kotlinx.coroutines.flow.Flow
 
 class AlalPdfRepository(private val dao: AlalPdfDao) {
     fun recent(): Flow<List<RecentDocumentEntity>> = dao.recentDocuments()
-    suspend fun remember(document: PdfDocument) = dao.upsertRecent(
-        RecentDocumentEntity(document.uri.toString(), document.name, document.sizeBytes, document.lastModified, System.currentTimeMillis(), 0)
-    )
+    suspend fun remember(document: PdfDocument) {
+        val uri = document.uri.toString()
+        val openedAt = System.currentTimeMillis()
+        val updated = dao.updateRecentMetadata(
+            uri = uri,
+            displayName = document.name,
+            sizeBytes = document.sizeBytes,
+            lastModified = document.lastModified,
+            openedAt = openedAt,
+        )
+        if (updated == 0) {
+            dao.upsertRecent(
+                RecentDocumentEntity(
+                    uri,
+                    document.name,
+                    document.sizeBytes,
+                    document.lastModified,
+                    openedAt,
+                    0,
+                ),
+            )
+        }
+    }
     suspend fun savePage(uri: Uri, page: Int) = dao.updateLastReadPage(uri.toString(), page, System.currentTimeMillis())
     suspend fun page(uri: Uri): Int = dao.lastReadPage(uri.toString()) ?: 0
     suspend fun forget(uri: Uri) {

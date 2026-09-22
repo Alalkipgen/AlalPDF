@@ -55,6 +55,8 @@ import com.alalkipgen.alalpdf.reader.bookmark.BookmarksScreen
 import com.alalkipgen.alalpdf.reader.bookmark.BookmarksViewModel
 import com.alalkipgen.alalpdf.ui.theme.AlalPdfTheme
 import com.alalkipgen.alalpdf.ui.theme.ThemeMode
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -371,14 +373,32 @@ private fun ReaderRoute(
             positionLoaded = true
         }
     }
+    // Do not compose the list at page 0 before the persisted position arrives:
+    // LazyListState immediately reports its first item and used to overwrite
+    // the real progress with page 0 during this race.
+    if (!positionLoaded) {
+        Text("Restoring reading position…")
+        return
+    }
     LaunchedEffect(uri, width, positionLoaded) {
-        if (positionLoaded) readerViewModel.load(uri, width, currentPage, nightMode,password)
+        if (readerState.pageCount > 0) delay(ORIENTATION_RENDER_DEBOUNCE_MS)
+        readerViewModel.load(uri, width, currentPage, nightMode,password)
     }
     LaunchedEffect(readerState.pageCount) {
         if (readerState.pageCount > 0) prefs.setPageCount(uri.toString(), readerState.pageCount)
     }
 
-    BackHandler(enabled = !showBookmarks) { onBack() }
+    fun leaveReader() {
+        // Enter the non-cancellable database write before removing this
+        // composable, otherwise its scope can be cancelled on the same frame.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            progressStore.save(uri, currentPage)
+        }
+        readerViewModel.releaseDocument()
+        onBack()
+    }
+
+    BackHandler(enabled = !showBookmarks) { leaveReader() }
     PdfReaderScreen(
         state = readerState,
         title = title,
@@ -386,10 +406,7 @@ private fun ReaderRoute(
         nightMode = nightMode,
         pendingPage = pendingPage,
         onPendingPageConsumed = { pendingPage = null },
-        onBack = {
-            readerViewModel.releaseDocument()
-            onBack()
-        },
+        onBack = { leaveReader() },
     onNightModeChange = { nightMode = it },
         onShare = {
             runCatching {
@@ -433,3 +450,5 @@ private fun ReaderRoute(
         }
     }
 }
+
+private const val ORIENTATION_RENDER_DEBOUNCE_MS = 120L

@@ -539,7 +539,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
-    private fun renderWidth(width: Int): Int = width.coerceIn(1, maxRenderWidth)
+    private fun renderWidth(width: Int): Int =
+        ReaderMemoryPolicy.stableRenderWidth(width, maxRenderWidth)
 
     private fun releaseMemory(critical: Boolean) {
         if (!::cache.isInitialized) return

@@ -18,6 +18,24 @@ interface AlalPdfDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertRecent(document: RecentDocumentEntity)
 
+    @Query(
+        """
+        UPDATE recent_documents
+        SET displayName = :displayName,
+            sizeBytes = :sizeBytes,
+            lastModified = :lastModified,
+            lastOpenedAt = :openedAt
+        WHERE uri = :uri
+        """,
+    )
+    suspend fun updateRecentMetadata(
+        uri: String,
+        displayName: String,
+        sizeBytes: Long,
+        lastModified: Long,
+        openedAt: Long,
+    ): Int
+
     @Query("DELETE FROM recent_documents WHERE uri = :uri")
     suspend fun deleteRecent(uri: String)
 
