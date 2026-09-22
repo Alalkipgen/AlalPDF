@@ -17,12 +17,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -31,6 +33,9 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.alalkipgen.alalpdf.create.CreatePdfMode
 import com.alalkipgen.alalpdf.create.CreatePdfScreen
@@ -349,7 +354,9 @@ private fun ReaderRoute(
     )
     readerViewModel.initialize(appContext)
     val readerState by readerViewModel.uiState.collectAsState()
-    val progressStore = remember(dataRepository) { ReadingProgressStore(dataRepository) }
+    val progressStore = remember(appContext, dataRepository) {
+        ReadingProgressStore(appContext, dataRepository)
+    }
     val bookmarksViewModel: BookmarksViewModel = viewModel(
         key = "bookmarks-$uri",
         factory = BookmarksViewModel.Factory(dataRepository, uri),
@@ -363,6 +370,24 @@ private fun ReaderRoute(
     var pendingPage by rememberSaveable(uri.toString()) { mutableStateOf<Int?>(null) }
     var showBookmarks by rememberSaveable(uri.toString()) { mutableStateOf(false) }
     var password by rememberSaveable(uri.toString()) { mutableStateOf<String?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val latestPage = rememberUpdatedState(currentPage)
+    val readingPositionReady = rememberUpdatedState(positionLoaded)
+
+    DisposableEffect(lifecycleOwner, uri, progressStore) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && readingPositionReady.value) {
+                progressStore.checkpoint(uri, latestPage.value)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            if (readingPositionReady.value) {
+                progressStore.checkpoint(uri, latestPage.value)
+            }
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     LaunchedEffect(uri) {
         runCatching { libraryRepository.inspect(uri).name }.getOrNull()?.let { title = it }
@@ -389,10 +414,13 @@ private fun ReaderRoute(
     }
 
     fun leaveReader() {
+        // SharedPreferences.commit() completes before navigation removes the
+        // reader, so a subsequent task/process kill cannot discard this page.
+        progressStore.checkpoint(uri, currentPage)
         // Enter the non-cancellable database write before removing this
         // composable, otherwise its scope can be cancelled on the same frame.
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            progressStore.save(uri, currentPage)
+            progressStore.syncToDatabase(uri, currentPage)
         }
         readerViewModel.releaseDocument()
         onBack()
@@ -422,7 +450,8 @@ private fun ReaderRoute(
         onAddBookmark = { bookmarksViewModel.add(currentPage) },
         onPageSelected = { page ->
             currentPage = page
-            scope.launch { progressStore.save(uri, page) }
+            progressStore.checkpoint(uri, page)
+            scope.launch { progressStore.syncToDatabase(uri, page) }
             readerViewModel.renderWindow(uri, page, width, nightMode)
         },
         onRender = { page -> readerViewModel.requestPage(uri, page, width) },

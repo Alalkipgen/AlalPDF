@@ -12,7 +12,7 @@ val releaseKeyPassword = System.getenv("ALALPDF_KEY_PASSWORD")
 val hasReleaseCredentials = listOf(releaseKeystorePath, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
 
 android { namespace = "com.alalkipgen.alalpdf"; compileSdk = 35
-    defaultConfig { applicationId = "com.alalkipgen.alalpdf"; minSdk = 26; targetSdk = 35; versionCode = 12; versionName = "0.3.4-beta"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "com.alalkipgen.alalpdf"; minSdk = 26; targetSdk = 35; versionCode = 13; versionName = "0.3.5-beta"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -53,6 +53,7 @@ dependencies {
     implementation("com.google.myanmartools:myanmar-tools:1.2.0")
     implementation("io.legere:pdfiumandroid:1.0.32")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.room:room-runtime:2.6.1")
