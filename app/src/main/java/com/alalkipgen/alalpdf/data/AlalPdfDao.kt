@@ -45,6 +45,22 @@ interface AlalPdfDao {
     @Query("UPDATE recent_documents SET lastReadPage = :page, lastOpenedAt = :openedAt WHERE uri = :uri")
     suspend fun updateLastReadPage(uri: String, page: Int, openedAt: Long)
 
+    @Query(
+        """
+        SELECT * FROM reading_progress
+        WHERE documentKey IN (:documentKeys)
+        ORDER BY updatedAt DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun latestReadingProgress(documentKeys: List<String>): ReadingProgressEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertReadingProgress(progress: List<ReadingProgressEntity>)
+
+    @Query("DELETE FROM reading_progress WHERE documentUri = :uri")
+    suspend fun deleteReadingProgress(uri: String)
+
     @Query("SELECT * FROM bookmarks WHERE documentUri = :uri ORDER BY pageIndex ASC")
     fun bookmarks(uri: String): Flow<List<BookmarkEntity>>
 

@@ -41,6 +41,7 @@ import com.alalkipgen.alalpdf.create.CreatePdfMode
 import com.alalkipgen.alalpdf.create.CreatePdfScreen
 import com.alalkipgen.alalpdf.create.CreatePdfRepository
 import com.alalkipgen.alalpdf.create.PdfDraft
+import com.alalkipgen.alalpdf.diagnostics.AppExitDiagnostics
 import com.alalkipgen.alalpdf.tools.PdfToolsScreen
 import com.alalkipgen.alalpdf.data.AlalPdfDatabase
 import com.alalkipgen.alalpdf.data.AlalPdfRepository
@@ -69,6 +70,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppExitDiagnostics.install(applicationContext)
         incomingPdf = intent.pdfUri()
         setContent {
             var mode by rememberSaveable { mutableStateOf(ThemeMode.SYSTEM.name) }
@@ -349,7 +351,10 @@ private fun ReaderRoute(
     }
 
     val readerViewModel: PdfReaderViewModel = viewModel(
-        key = "reader-$uri-$readerSession",
+        // One reader ViewModel owns one native repository for the Activity.
+        // URI/session keyed ViewModels remained in the ViewModelStore after
+        // leaving composition and could retain text geometry or reopen PDFium.
+        key = "reader",
         factory = PdfReaderViewModel.Factory(PdfReaderRepository(appContext)),
     )
     readerViewModel.initialize(appContext)
@@ -405,9 +410,16 @@ private fun ReaderRoute(
         Text("Restoring reading position…")
         return
     }
-    LaunchedEffect(uri, width, positionLoaded) {
+    LaunchedEffect(uri, width, positionLoaded, readerSession) {
         if (readerState.pageCount > 0) delay(ORIENTATION_RENDER_DEBOUNCE_MS)
-        readerViewModel.load(uri, width, currentPage, nightMode,password)
+        readerViewModel.load(
+            uri = uri,
+            width = width,
+            initialPage = currentPage,
+            nightMode = nightMode,
+            password = password,
+            reloadToken = readerSession,
+        )
     }
     LaunchedEffect(readerState.pageCount) {
         if (readerState.pageCount > 0) prefs.setPageCount(uri.toString(), readerState.pageCount)
@@ -460,7 +472,17 @@ private fun ReaderRoute(
         onRequestPageLinks = { page -> readerViewModel.requestPageLinks(uri, page) },
         onSearch = { query -> readerViewModel.search(uri, query) },
         onClearSearch = { readerViewModel.clearSearch() },
-        onPasswordSubmit = { value -> password=value;readerViewModel.load(uri,width,currentPage,nightMode,value) },
+        onPasswordSubmit = { value ->
+            password = value
+            readerViewModel.load(
+                uri = uri,
+                width = width,
+                initialPage = currentPage,
+                nightMode = nightMode,
+                password = value,
+                reloadToken = readerSession,
+            )
+        },
         onEditPdf = {
             readerViewModel.releaseDocument()
             onEdit()

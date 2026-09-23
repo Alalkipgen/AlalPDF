@@ -31,9 +31,29 @@ class AlalPdfRepository(private val dao: AlalPdfDao) {
     }
     suspend fun savePage(uri: Uri, page: Int) = dao.updateLastReadPage(uri.toString(), page, System.currentTimeMillis())
     suspend fun page(uri: Uri): Int = dao.lastReadPage(uri.toString()) ?: 0
+    suspend fun readingProgress(documentKeys: List<String>): ReadingProgressEntity? =
+        if (documentKeys.isEmpty()) null else dao.latestReadingProgress(documentKeys)
+    suspend fun saveReadingProgress(
+        documentKeys: List<String>,
+        uri: Uri,
+        page: Int,
+        updatedAt: Long,
+    ) {
+        val safePage = page.coerceAtLeast(0)
+        val rows = documentKeys.distinct().map { key ->
+            ReadingProgressEntity(
+                documentKey = key,
+                documentUri = uri.toString(),
+                pageIndex = safePage,
+                updatedAt = updatedAt,
+            )
+        }
+        if (rows.isNotEmpty()) dao.upsertReadingProgress(rows)
+    }
     suspend fun forget(uri: Uri) {
         dao.deleteRecent(uri.toString())
         dao.deleteBookmarks(uri.toString())
+        dao.deleteReadingProgress(uri.toString())
     }
     fun bookmarks(uri: Uri): Flow<List<BookmarkEntity>> = dao.bookmarks(uri.toString())
     suspend fun toggleBookmark(uri: Uri, page: Int, label: String? = null): Boolean {

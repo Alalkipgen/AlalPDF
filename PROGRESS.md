@@ -1,5 +1,9 @@
 # AlalPDF Overhaul — Progress Tracker
 
+> **Current reader work:** Phase 1–4 persistence, memory and diagnostics are
+> tracked in [`READER_STABILITY_PLAN.md`](READER_STABILITY_PLAN.md). Read that
+> file first for v0.3.6-beta recovery and verification status.
+
 > **Purpose:** This file is the single source of truth for resuming work after a
 > sandbox/session crash. Always read this file FIRST before doing anything.
 

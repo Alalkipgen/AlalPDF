@@ -13,8 +13,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.LinkedHashMap
 import java.util.PriorityQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -101,10 +104,15 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     private val textRequests = ConcurrentHashMap<Int, Boolean>()
     private val linkRequests = ConcurrentHashMap<Int, Boolean>()
     private val thumbnailRequests = ConcurrentHashMap<Int, Boolean>()
+    private val thumbnailOrderLock = Any()
+    private val thumbnailOrder = LinkedHashMap<Int, Unit>(32, 0.75f, true)
+    private var documentJob: Job = SupervisorJob()
+    private var documentScope = CoroutineScope(documentJob + Dispatchers.IO)
     private var searchJob: Job? = null
 
     @Volatile private var generation = 0
     @Volatile private var loadedUri: String? = null
+    @Volatile private var loadedRevision = Int.MIN_VALUE
     @Volatile private var focusedPage = 0
     @Volatile private var scrollDirection = 1
 
@@ -141,23 +149,33 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
-    fun load(uri: Uri, width: Int, initialPage: Int = 0, nightMode: Boolean = false,password:String?=null) {
+    fun load(
+        uri: Uri,
+        width: Int,
+        initialPage: Int = 0,
+        nightMode: Boolean = false,
+        password: String? = null,
+        reloadToken: Int = 0,
+    ) {
         if (!::cache.isInitialized) return
         val key = uri.toString()
-        if (key == loadedUri && _uiState.value.pageCount > 0) {
+        if (key == loadedUri && reloadToken == loadedRevision && _uiState.value.pageCount > 0) {
             renderWindow(uri, initialPage, width, nightMode)
             return
         }
 
+        restartDocumentScope()
         generation++
         val currentGeneration = generation
         loadedUri = key
+        loadedRevision = reloadToken
         focusedPage = initialPage.coerceAtLeast(0)
         synchronized(queueLock) { queue.clear(); queuedPages.clear() }
-        searchJob?.cancel()
+        searchJob = null
         textRequests.clear()
         linkRequests.clear()
         thumbnailRequests.clear()
+        synchronized(thumbnailOrderLock) { thumbnailOrder.clear() }
         cache.clear()
         renderedWidths.clear()
         Snapshot.withMutableSnapshot { pages.clear(); thumbnails.clear(); pageAspectRatios.clear() }
@@ -167,7 +185,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
             pageAspectRatios = pageAspectRatios,
         )
 
-        viewModelScope.launch(Dispatchers.IO) {
+        documentScope.launch {
             runCatching {
                 val count = repository.pageCount(uri,password)
                 ensureActive()
@@ -206,13 +224,19 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         if (page < 0 || uri.toString() != loadedUri) return
         if (textRequests.putIfAbsent(page, true) != null) return
         val expectedGeneration = generation
-        viewModelScope.launch(Dispatchers.IO) {
+        documentScope.launch {
             runCatching {
                 val text = repository.pageText(uri, page)
+                ensureActive()
                 val runs = repository.pageTextRuns(uri, page)
                 text to runs
             }.onSuccess { (text, runs) ->
-                if (expectedGeneration != generation) return@onSuccess
+                if (expectedGeneration != generation ||
+                    abs(page - focusedPage) > TEXT_CACHE_DISTANCE
+                ) {
+                    textRequests.remove(page)
+                    return@onSuccess
+                }
                 _uiState.update { state ->
                     state.copy(
                         pageTexts = state.pageTexts + (page to text),
@@ -243,10 +267,15 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         if (page < 0 || uri.toString() != loadedUri) return
         if (linkRequests.putIfAbsent(page, true) != null) return
         val expectedGeneration = generation
-        viewModelScope.launch(Dispatchers.IO) {
+        documentScope.launch {
             runCatching { repository.pageLinks(uri, page) }
                 .onSuccess { links ->
-                    if (expectedGeneration != generation) return@onSuccess
+                    if (expectedGeneration != generation ||
+                        abs(page - focusedPage) > TEXT_CACHE_DISTANCE
+                    ) {
+                        linkRequests.remove(page)
+                        return@onSuccess
+                    }
                     _uiState.update { state ->
                         state.copy(pageLinks = state.pageLinks + (page to links))
                     }
@@ -275,7 +304,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         _uiState.update {
             it.copy(searchQuery = query, searchResults = emptyList(), searchProgress = 0f, searchRunning = true)
         }
-        searchJob = viewModelScope.launch(Dispatchers.IO) {
+        searchJob = documentScope.launch {
             val count = _uiState.value.pageCount
             val found = ArrayList<PdfSearchResult>()
             var failure: Throwable? = null
@@ -290,7 +319,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                     .getOrDefault("")
                 val hits = PdfTextSearch.matches(page, text, trimmed)
                 if (hits.isNotEmpty()) {
-                    found.addAll(hits)
+                    val remaining = (MAX_SEARCH_RESULTS - found.size).coerceAtLeast(0)
+                    if (remaining > 0) found.addAll(hits.take(remaining))
                     val snapshot = ArrayList(found)
                     _uiState.update { it.copy(searchResults = snapshot) }
                 }
@@ -375,16 +405,11 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         if (thumbnails.containsKey(page)) return
         if (thumbnailRequests.putIfAbsent(page, true) != null) return
         val expectedGeneration = generation
-        viewModelScope.launch(Dispatchers.IO) {
+        documentScope.launch {
             runCatching { repository.thumbnail(uri, page) }
                 .onSuccess { bitmap ->
                     if (expectedGeneration != generation) return@onSuccess
-                    Snapshot.withMutableSnapshot {
-                        thumbnails[page] = bitmap
-                        if (!pageAspectRatios.containsKey(page)) {
-                            pageAspectRatios[page] = bitmap.height.toFloat() / bitmap.width.coerceAtLeast(1)
-                        }
-                    }
+                    publishThumbnail(page, bitmap)
                 }
                 .onFailure { error ->
                     if (error is CancellationException) throw error
@@ -397,6 +422,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         scrollDirection = (pageIndex - focusedPage).coerceIn(-1, 1).takeIf { it != 0 } ?: scrollDirection
         focusedPage = pageIndex
         pruneDisplayedPages(pageIndex)
+        pruneTextLayers(pageIndex)
         synchronized(queueLock) {
             val stale = queue.filter {
                 it.generation != expectedGeneration || abs(it.page - pageIndex) > DISPLAY_DISTANCE
@@ -539,6 +565,48 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
     }
 
+    /**
+     * Character geometry is substantially larger than rendered text. Keep only
+     * the pages that can be selected now; revisiting a page reloads it through
+     * the PDFium LRU instead of retaining the whole document in Compose state.
+     */
+    private fun pruneTextLayers(centerPage: Int) {
+        val keep: (Int) -> Boolean = { page -> abs(page - centerPage) <= TEXT_CACHE_DISTANCE }
+        _uiState.update { state ->
+            state.copy(
+                pageTexts = state.pageTexts.filterKeys(keep),
+                textRuns = state.textRuns.filterKeys(keep),
+                pageLinks = state.pageLinks.filterKeys(keep),
+            )
+        }
+        textRequests.keys.filterNot(keep).forEach(textRequests::remove)
+        linkRequests.keys.filterNot(keep).forEach(linkRequests::remove)
+    }
+
+    /** Bounded UI thumbnail map; the disk cache remains the long-lived tier. */
+    private fun publishThumbnail(page: Int, bitmap: Bitmap) {
+        val evicted = ArrayList<Int>()
+        synchronized(thumbnailOrderLock) {
+            thumbnailOrder[page] = Unit
+            while (thumbnailOrder.size > MAX_UI_THUMBNAILS) {
+                val eldest = thumbnailOrder.entries.iterator()
+                if (!eldest.hasNext()) break
+                val entry = eldest.next()
+                evicted += entry.key
+                eldest.remove()
+            }
+        }
+        Snapshot.withMutableSnapshot {
+            evicted.forEach(thumbnails::remove)
+            thumbnails[page] = bitmap
+            if (!pageAspectRatios.containsKey(page)) {
+                pageAspectRatios[page] =
+                    bitmap.height.toFloat() / bitmap.width.coerceAtLeast(1)
+            }
+        }
+        evicted.forEach(thumbnailRequests::remove)
+    }
+
     private fun renderWidth(width: Int): Int =
         ReaderMemoryPolicy.stableRenderWidth(width, maxRenderWidth)
 
@@ -547,6 +615,10 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         if (critical) cache.clear() else cache.trimToBytes(CACHE_LOW_MEMORY_BYTES)
         repository.trimMemory()
         if (critical) {
+            textRequests.clear()
+            linkRequests.clear()
+            thumbnailRequests.clear()
+            synchronized(thumbnailOrderLock) { thumbnailOrder.clear() }
             Snapshot.withMutableSnapshot {
                 pages.keys.filter { it != focusedPage }.forEach { page ->
                     pages.remove(page)
@@ -554,7 +626,22 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 }
                 thumbnails.clear()
             }
+            _uiState.update { state ->
+                state.copy(
+                    pageTexts = emptyMap(),
+                    textRuns = emptyMap(),
+                    pageLinks = emptyMap(),
+                    searchResults = emptyList(),
+                    searchRunning = false,
+                )
+            }
         }
+    }
+
+    private fun restartDocumentScope() {
+        documentJob.cancel()
+        documentJob = SupervisorJob()
+        documentScope = CoroutineScope(documentJob + Dispatchers.IO)
     }
 
     /**
@@ -565,11 +652,14 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     fun releaseDocument() {
         generation++
         loadedUri = null
-        searchJob?.cancel()
+        loadedRevision = Int.MIN_VALUE
+        documentJob.cancel()
+        searchJob = null
         synchronized(queueLock) { queue.clear(); queuedPages.clear() }
         textRequests.clear()
         linkRequests.clear()
         thumbnailRequests.clear()
+        synchronized(thumbnailOrderLock) { thumbnailOrder.clear() }
         Snapshot.withMutableSnapshot {
             pages.clear()
             thumbnails.clear()
@@ -577,14 +667,21 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         }
         renderedWidths.clear()
         if (::cache.isInitialized) cache.clear()
+        _uiState.value = PdfReaderUiState(
+            pages = pages,
+            thumbnails = thumbnails,
+            pageAspectRatios = pageAspectRatios,
+        )
         repository.close()
     }
 
     override fun onCleared() {
         generation++
         wakeUp.close()
-        searchJob?.cancel()
+        documentJob.cancel()
+        searchJob = null
         synchronized(queueLock) { queue.clear(); queuedPages.clear() }
+        synchronized(thumbnailOrderLock) { thumbnailOrder.clear() }
         Snapshot.withMutableSnapshot { pages.clear(); thumbnails.clear(); pageAspectRatios.clear() }
         if (::cache.isInitialized) cache.clear()
         repository.close()
@@ -610,5 +707,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         const val CACHE_LOW_MEMORY_BYTES = 4 * 1024 * 1024
         const val FULL_RENDER_PRIORITY = 100
         const val IDLE_FULL_RENDER_PRIORITY = -100
+        const val TEXT_CACHE_DISTANCE = 3
+        const val MAX_UI_THUMBNAILS = 24
+        const val MAX_SEARCH_RESULTS = 500
     }
 }

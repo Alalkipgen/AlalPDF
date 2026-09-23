@@ -9,6 +9,17 @@ import io.legere.pdfiumandroid.PdfiumCore
 import java.io.Closeable
 
 /**
+ * PDFium explicitly makes no thread-safety guarantee. This process-wide gate
+ * covers every PdfiumTextSource, including short-lived tools and old reader
+ * sessions that are finishing cancellation.
+ */
+internal object PdfiumGate {
+    private val lock = Any()
+
+    fun <T> call(block: () -> T): T = synchronized(lock, block)
+}
+
+/**
  * Character level text geometry, backed by PDFium.
  *
  * Selection used to be built from PDFBox word boxes, so the smallest thing a
@@ -33,25 +44,34 @@ internal class PdfiumTextSource private constructor(
     private var closed = false
 
     override val pageCount: Int
-        get() = if (closed) 0 else runCatching { document.getPageCount() }.getOrDefault(0)
+        get() = PdfiumGate.call {
+            if (closed) 0 else runCatching { document.getPageCount() }.getOrDefault(0)
+        }
 
     /** One run per character, in reading order, with normalized coordinates. */
     override fun charRuns(page: Int): List<PdfTextRun> {
         if (closed || page < 0) return emptyList()
         runCache.get(page)?.let { return it }
-        val runs = synchronized(lock) { readCharRuns(page) }
+        val runs = PdfiumGate.call {
+            synchronized(lock) {
+                if (closed) emptyList() else readCharRuns(page)
+            }
+        }
         runCache.put(page, runs)
         return runs
     }
 
     /** Page size in PDF points, or null when the page cannot be opened. */
     override fun pageSizePoints(page: Int): android.util.SizeF? = runCatching {
-        synchronized(lock) {
-            document.openPage(page).use { pdfPage ->
-                android.util.SizeF(
-                    pdfPage.getPageWidthPoint().toFloat(),
-                    pdfPage.getPageHeightPoint().toFloat(),
-                )
+        PdfiumGate.call {
+            synchronized(lock) {
+                if (closed) return@call null
+                document.openPage(page).use { pdfPage ->
+                    android.util.SizeF(
+                        pdfPage.getPageWidthPoint().toFloat(),
+                        pdfPage.getPageHeightPoint().toFloat(),
+                    )
+                }
             }
         }
     }.getOrNull()
@@ -64,27 +84,31 @@ internal class PdfiumTextSource private constructor(
     }
 
     override fun pageLinks(page: Int): List<PdfPageLink> = runCatching {
-        synchronized(lock) {
-            document.openPage(page).use { pdfPage ->
-                val width = pdfPage.getPageWidthPoint().toFloat().coerceAtLeast(1f)
-                val height = pdfPage.getPageHeightPoint().toFloat().coerceAtLeast(1f)
-                pdfPage.getPageLinks().mapNotNull { link: PdfDocument.Link ->
-                    val url = link.uri?.trim()?.takeIf(::isSafeWebUrl) ?: return@mapNotNull null
-                    val box = link.bounds
-                    val left = minOf(box.left, box.right) / width
-                    val right = maxOf(box.left, box.right) / width
-                    val top = 1f - maxOf(box.top, box.bottom) / height
-                    val bottom = 1f - minOf(box.top, box.bottom) / height
-                    rotateLinkBounds(
-                        left.coerceIn(0f, 1f),
-                        top.coerceIn(0f, 1f),
-                        right.coerceIn(0f, 1f),
-                        bottom.coerceIn(0f, 1f),
-                        pdfPage.getPageRotation(),
-                        url,
-                    )
-                }.distinctBy { link ->
-                    listOf(link.url, link.left, link.top, link.right, link.bottom)
+        PdfiumGate.call {
+            synchronized(lock) {
+                if (closed) return@call emptyList()
+                document.openPage(page).use { pdfPage ->
+                    val width = pdfPage.getPageWidthPoint().toFloat().coerceAtLeast(1f)
+                    val height = pdfPage.getPageHeightPoint().toFloat().coerceAtLeast(1f)
+                    pdfPage.getPageLinks().mapNotNull { link: PdfDocument.Link ->
+                        val url = link.uri?.trim()?.takeIf(::isSafeWebUrl)
+                            ?: return@mapNotNull null
+                        val box = link.bounds
+                        val left = minOf(box.left, box.right) / width
+                        val right = maxOf(box.left, box.right) / width
+                        val top = 1f - maxOf(box.top, box.bottom) / height
+                        val bottom = 1f - minOf(box.top, box.bottom) / height
+                        rotateLinkBounds(
+                            left.coerceIn(0f, 1f),
+                            top.coerceIn(0f, 1f),
+                            right.coerceIn(0f, 1f),
+                            bottom.coerceIn(0f, 1f),
+                            pdfPage.getPageRotation(),
+                            url,
+                        )
+                    }.distinctBy { link ->
+                        listOf(link.url, link.left, link.top, link.right, link.bottom)
+                    }
                 }
             }
         }
@@ -134,9 +158,14 @@ internal class PdfiumTextSource private constructor(
 
     override fun close() {
         if (closed) return
-        closed = true
-        runCatching { document.close() }
-        runCatching { descriptor.close() }
+        PdfiumGate.call {
+            synchronized(lock) {
+                if (closed) return@call
+                closed = true
+                runCatching { document.close() }
+                runCatching { descriptor.close() }
+            }
+        }
     }
 
     private fun isSafeWebUrl(value: String): Boolean {
@@ -185,17 +214,19 @@ internal class PdfiumTextSource private constructor(
             context: Context,
             descriptor: ParcelFileDescriptor,
             password: String?,
-        ): PdfiumTextSource? = runCatching {
-            val core = PdfiumCore(context)
-            val document = if (password.isNullOrEmpty()) {
-                core.newDocument(descriptor)
-            } else {
-                core.newDocument(descriptor, password)
+        ): PdfiumTextSource? = PdfiumGate.call {
+            runCatching {
+                val core = PdfiumCore(context)
+                val document = if (password.isNullOrEmpty()) {
+                    core.newDocument(descriptor)
+                } else {
+                    core.newDocument(descriptor, password)
+                }
+                PdfiumTextSource(document, descriptor)
+            }.getOrElse {
+                runCatching { descriptor.close() }
+                null
             }
-            PdfiumTextSource(document, descriptor)
-        }.getOrElse {
-            runCatching { descriptor.close() }
-            null
         }
     }
 }

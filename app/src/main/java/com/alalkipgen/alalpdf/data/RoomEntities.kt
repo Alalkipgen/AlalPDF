@@ -25,3 +25,21 @@ data class BookmarkEntity(
     val label: String?,
     val createdAt: Long,
 )
+
+/**
+ * Durable reader position, independent from the Recent documents list.
+ *
+ * A document may be opened through more than one Android URI (SAF, MediaStore
+ * or file://), so the progress store writes the same checkpoint under the
+ * stable keys resolved for that document.
+ */
+@Entity(
+    tableName = "reading_progress",
+    indices = [Index(value = ["documentUri"])],
+)
+data class ReadingProgressEntity(
+    @PrimaryKey val documentKey: String,
+    val documentUri: String,
+    val pageIndex: Int,
+    val updatedAt: Long,
+)

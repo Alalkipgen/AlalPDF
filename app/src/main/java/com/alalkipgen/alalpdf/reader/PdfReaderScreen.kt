@@ -77,6 +77,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
@@ -104,6 +105,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -132,7 +134,13 @@ fun PdfReaderScreen(
     onPasswordSubmit: (String) -> Unit = {},
     onEditPdf: () -> Unit = {},
 ) {
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialPage.coerceAtLeast(0))
+    // A cold reader starts with pageCount == 0. Initialising or scrolling the
+    // list to the saved page at that point clamps it to page zero, which then
+    // overwrites the durable checkpoint. Start neutral and apply the target
+    // only after real list items exist.
+    val listState = rememberLazyListState()
+    var restoreTarget by remember { mutableIntStateOf(initialPage.coerceAtLeast(0)) }
+    var pageSelectionEnabled by remember { mutableStateOf(false) }
     val horizontalScroll = rememberScrollState()
     val haptics = LocalHapticFeedback.current
     val view = LocalView.current
@@ -211,13 +219,13 @@ fun PdfReaderScreen(
 
     // PDFium text geometry and link parsing wait until scrolling settles, so
     // they never compete with the visible-page preview.
-    LaunchedEffect(listState, state.pageCount) {
+    LaunchedEffect(listState, state.pageCount, pageSelectionEnabled) {
         snapshotFlow {
             val layout = listState.layoutInfo
             val visible = layout.visibleItemsInfo.map { it.index }.distinct()
             Triple(listState.isScrollInProgress, visiblePage, visible)
         }.distinctUntilChanged().collectLatest { (scrolling, page, visiblePages) ->
-            if (!scrolling && state.pageCount > 0) {
+            if (pageSelectionEnabled && !scrolling && state.pageCount > 0) {
                 delay(SETTLED_EXTRACTION_DELAY_MS)
                 onPromotePage(page)
                 // Links must work on every page the user can tap, not only the
@@ -234,18 +242,32 @@ fun PdfReaderScreen(
     }
 
     LaunchedEffect(requestedPage) {
-        requestedPage?.let {
+        requestedPage?.takeIf { state.pageCount > 0 }?.let {
             listState.scrollToItem(it.coerceIn(0, lastIndex))
             requestedPage = null
         }
     }
     LaunchedEffect(pendingPage) {
         pendingPage?.let {
-            listState.scrollToItem(it.coerceIn(0, lastIndex))
-            onPendingPageConsumed()
+            restoreTarget = it.coerceAtLeast(0)
+            pageSelectionEnabled = false
         }
     }
-    LaunchedEffect(listState) {
+    LaunchedEffect(state.pageCount, restoreTarget, pendingPage, pageSelectionEnabled) {
+        if (pageSelectionEnabled) return@LaunchedEffect
+        val target = ReaderRestorePolicy.targetPage(restoreTarget, state.pageCount)
+            ?: return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+        listState.scrollToItem(target)
+        // Enable persistence only after the restored item is the real visible
+        // page. The first visible-page emission can no longer write page zero.
+        pageSelectionEnabled = true
+        if (pendingPage != null) onPendingPageConsumed()
+    }
+    LaunchedEffect(listState, pageSelectionEnabled, state.pageCount) {
+        if (!ReaderRestorePolicy.canPersistSelection(state.pageCount, pageSelectionEnabled)) {
+            return@LaunchedEffect
+        }
         snapshotFlow { visiblePage }
             .distinctUntilChanged()
             .collect { onPageSelected(it) }
