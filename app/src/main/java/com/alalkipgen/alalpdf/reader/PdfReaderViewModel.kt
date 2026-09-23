@@ -73,8 +73,18 @@ data class PdfReaderUiState(
     val errorMessage: String? = null,
 )
 
-/** Serial visible-page-first render queue for PdfRenderer. */
+/**
+ * Single-consumer, visible-page-first render queue.
+ *
+ * Everything that touches a native engine - full page renders, previews and
+ * grid thumbnails - goes through this one queue. The previous version only
+ * queued page renders and launched a separate unbounded coroutine for every
+ * thumbnail, so scrolling quickly through a long document started one native
+ * render per page that scrolled past, all of them fighting for the same lock.
+ */
 class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewModel() {
+    private enum class RenderKind { PAGE, THUMBNAIL }
+
     private data class RenderRequest(
         val uri: Uri,
         val page: Int,
@@ -82,6 +92,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         val generation: Int,
         val priority: Int,
         val order: Long,
+        val kind: RenderKind,
     )
 
     private val pages = mutableStateMapOf<Int, Bitmap>()
@@ -97,17 +108,26 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     private var maxRenderWidth = 1_200
     private val renderedWidths = ConcurrentHashMap<Int, Int>()
     private val queueLock = Any()
-    private val queue = PriorityQueue<RenderRequest>(compareBy<RenderRequest> { it.priority }.thenBy { it.order })
-    private val queuedPages = mutableSetOf<Pair<Int, Int>>()
+    private val queue = PriorityQueue<RenderRequest>(
+        64,
+        compareBy<RenderRequest> { it.priority }.thenBy { it.order },
+    )
+
+    // Best pending request per page, so enqueueing is O(1) instead of a linear
+    // scan of the PriorityQueue on the main thread for every composed item.
+    // Superseded entries stay in the queue and are skipped when they are polled.
+    private val pendingPages = HashMap<Int, RenderRequest>()
+    private val pendingThumbs = HashMap<Int, RenderRequest>()
+
     private val wakeUp = Channel<Unit>(Channel.CONFLATED)
     private val sequence = AtomicLong(0)
     private val textRequests = ConcurrentHashMap<Int, Boolean>()
     private val linkRequests = ConcurrentHashMap<Int, Boolean>()
-    private val thumbnailRequests = ConcurrentHashMap<Int, Boolean>()
+    private val failedThumbnails = ConcurrentHashMap<Int, Boolean>()
     private val thumbnailOrderLock = Any()
     private val thumbnailOrder = LinkedHashMap<Int, Unit>(32, 0.75f, true)
     private var documentJob: Job = SupervisorJob()
-    private var documentScope = CoroutineScope(documentJob + Dispatchers.IO)
+    private var documentScope = CoroutineScope(documentJob + Dispatchers.Default)
     private var searchJob: Job? = null
 
     @Volatile private var generation = 0
@@ -115,6 +135,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     @Volatile private var loadedRevision = Int.MIN_VALUE
     @Volatile private var focusedPage = 0
     @Volatile private var scrollDirection = 1
+    @Volatile private var scrolling = false
 
     private val memoryCallbacks = object : ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: Configuration) = Unit
@@ -130,7 +151,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     init {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.Default) {
             for (signal in wakeUp) drainQueue()
         }
     }
@@ -146,6 +167,22 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
             maxRenderWidth = ReaderMemoryPolicy.maxRenderWidth(lowRam)
             applicationContext = appContext
             appContext.registerComponentCallbacks(memoryCallbacks)
+        }
+    }
+
+    /**
+     * Told by the reader whether the list is currently moving.
+     *
+     * A fling is the one moment where doing less work looks better: only the
+     * page under the finger is rasterized, everything else waits in the queue
+     * and is dropped for free when it leaves the viewport.
+     */
+    fun setScrolling(active: Boolean) {
+        if (scrolling == active) return
+        scrolling = active
+        if (!active) {
+            synchronized(queueLock) { compactLocked() }
+            wakeUp.trySend(Unit)
         }
     }
 
@@ -170,11 +207,12 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         loadedUri = key
         loadedRevision = reloadToken
         focusedPage = initialPage.coerceAtLeast(0)
-        synchronized(queueLock) { queue.clear(); queuedPages.clear() }
+        scrolling = false
+        clearQueue()
         searchJob = null
         textRequests.clear()
         linkRequests.clear()
-        thumbnailRequests.clear()
+        failedThumbnails.clear()
         synchronized(thumbnailOrderLock) { thumbnailOrder.clear() }
         cache.clear()
         renderedWidths.clear()
@@ -216,12 +254,12 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     /**
      * Extracts the text of one page, at most once per page per document.
      *
-     * The failure branch matters: extraction can still throw (corrupt object
-     * stream, unsupported encryption, out of memory) and that used to be
-     * discarded silently, leaving the UI stuck on "No selectable text".
+     * Never started while the list is moving: PDFium holds a process-wide lock
+     * for the whole character sweep of a page, which would otherwise delay the
+     * render of the page the user is actually looking at.
      */
     fun requestPageText(uri: Uri, page: Int) {
-        if (page < 0 || uri.toString() != loadedUri) return
+        if (page < 0 || uri.toString() != loadedUri || scrolling) return
         if (textRequests.putIfAbsent(page, true) != null) return
         val expectedGeneration = generation
         documentScope.launch {
@@ -264,7 +302,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     fun requestPageLinks(uri: Uri, page: Int) {
-        if (page < 0 || uri.toString() != loadedUri) return
+        if (page < 0 || uri.toString() != loadedUri || scrolling) return
         if (linkRequests.putIfAbsent(page, true) != null) return
         val expectedGeneration = generation
         documentScope.launch {
@@ -373,6 +411,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                 renderWidth(width),
                 generation,
                 IDLE_FULL_RENDER_PRIORITY,
+                RenderKind.PAGE,
             )
         }
         wakeUp.trySend(Unit)
@@ -389,11 +428,14 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         val safePage = pageIndex.coerceIn(0, count - 1)
         val distance = abs(safePage - focusedPage)
         if (distance > DISPLAY_DISTANCE) {
-            requestThumbnail(uri, safePage)
+            // A fling composes every page it passes. Asking each of them for a
+            // native thumbnail is what used to flood the queue and the IO pool,
+            // so distant pages are only fetched once the list has settled.
+            if (!scrolling) requestThumbnail(uri, safePage)
             return
         }
         synchronized(queueLock) {
-            enqueueLocked(uri, safePage, widthFor(distance, width), generation, distance)
+            enqueueLocked(uri, safePage, widthFor(distance, width), generation, distance, RenderKind.PAGE)
         }
         wakeUp.trySend(Unit)
     }
@@ -402,20 +444,18 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         val count = _uiState.value.pageCount
         if (count <= 0 || uri.toString() != loadedUri) return
         val page = pageIndex.coerceIn(0, count - 1)
-        if (thumbnails.containsKey(page)) return
-        if (thumbnailRequests.putIfAbsent(page, true) != null) return
-        val expectedGeneration = generation
-        documentScope.launch {
-            runCatching { repository.thumbnail(uri, page) }
-                .onSuccess { bitmap ->
-                    if (expectedGeneration != generation) return@onSuccess
-                    publishThumbnail(page, bitmap)
-                }
-                .onFailure { error ->
-                    if (error is CancellationException) throw error
-                    thumbnailRequests.remove(page)
-                }
+        if (thumbnails.containsKey(page) || failedThumbnails.containsKey(page)) return
+        synchronized(queueLock) {
+            enqueueLocked(
+                uri,
+                page,
+                THUMBNAIL_WIDTH_PX,
+                generation,
+                THUMBNAIL_PRIORITY,
+                RenderKind.THUMBNAIL,
+            )
         }
+        wakeUp.trySend(Unit)
     }
 
     private fun requestWindow(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int) {
@@ -424,13 +464,6 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         pruneDisplayedPages(pageIndex)
         pruneTextLayers(pageIndex)
         synchronized(queueLock) {
-            val stale = queue.filter {
-                it.generation != expectedGeneration || abs(it.page - pageIndex) > DISPLAY_DISTANCE
-            }
-            if (stale.isNotEmpty()) {
-                queue.removeAll(stale.toSet())
-                stale.forEach { queuedPages.remove(it.generation to it.page) }
-            }
             val order = ReaderMemoryPolicy.renderOrder(
                 pageIndex,
                 _uiState.value.pageCount,
@@ -439,7 +472,14 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
             )
             order.forEachIndexed { priority, page ->
                 val distance = abs(page - pageIndex)
-                enqueueLocked(uri, page, widthFor(distance, width), expectedGeneration, priority)
+                enqueueLocked(
+                    uri,
+                    page,
+                    widthFor(distance, width),
+                    expectedGeneration,
+                    priority,
+                    RenderKind.PAGE,
+                )
             }
         }
         wakeUp.trySend(Unit)
@@ -449,78 +489,198 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     private fun widthFor(distance: Int, width: Int): Int =
         if (distance <= FULL_QUALITY_DISTANCE) renderWidth(width) else PREVIEW_WIDTH_PX
 
-    private fun enqueueLocked(uri: Uri, page: Int, width: Int, expectedGeneration: Int, priority: Int) {
+    private fun enqueueLocked(
+        uri: Uri,
+        page: Int,
+        width: Int,
+        expectedGeneration: Int,
+        priority: Int,
+        kind: RenderKind,
+    ) {
         if (page !in 0 until _uiState.value.pageCount) return
-        if (pages[page] != null && (renderedWidths[page] ?: 0) >= width) return
 
-        val cached = cache.get(page)
-        if (cached != null && (renderedWidths[page] ?: 0) >= width) {
-            Snapshot.withMutableSnapshot { pages[page] = cached }
+        if (kind == RenderKind.PAGE) {
+            if (pages[page] != null && (renderedWidths[page] ?: 0) >= width) return
+            val cached = cache.get(page)
+            if (cached != null && (renderedWidths[page] ?: 0) >= width) {
+                Snapshot.withMutableSnapshot { pages[page] = cached }
+                return
+            }
+        } else if (thumbnails.containsKey(page)) {
             return
         }
 
-        val key = expectedGeneration to page
-        val existing = queue.firstOrNull { it.generation == expectedGeneration && it.page == page }
-        if (existing != null) {
-            if (existing.priority <= priority && existing.width >= width) return
-            queue.remove(existing)
-            queuedPages.remove(key)
+        val pendingMap = if (kind == RenderKind.PAGE) pendingPages else pendingThumbs
+        val existing = pendingMap[page]
+        if (existing != null &&
+            existing.generation == expectedGeneration &&
+            existing.priority <= priority &&
+            existing.width >= width
+        ) {
+            return
         }
-        if (!queuedPages.add(key)) return
-        queue.add(RenderRequest(uri, page, width, expectedGeneration, priority, sequence.incrementAndGet()))
+
+        if (queue.size >= ReaderScrollPolicy.MAX_QUEUE_LENGTH && !evictWorstLocked(priority)) return
+
+        val request = RenderRequest(
+            uri = uri,
+            page = page,
+            width = width,
+            generation = expectedGeneration,
+            priority = priority,
+            order = sequence.incrementAndGet(),
+            kind = kind,
+        )
+        pendingMap[page] = request
+        queue.add(request)
+    }
+
+    /** Drops the least useful queued item so a long fling cannot grow the queue. */
+    private fun evictWorstLocked(incomingPriority: Int): Boolean {
+        var worst: RenderRequest? = null
+        for (request in queue) {
+            val current = worst
+            if (current == null ||
+                request.priority > current.priority ||
+                (request.priority == current.priority && request.order < current.order)
+            ) {
+                worst = request
+            }
+        }
+        val victim = worst ?: return false
+        if (victim.priority < incomingPriority) return false
+        queue.remove(victim)
+        releasePendingLocked(victim)
+        return true
+    }
+
+    private fun compactLocked() {
+        if (queue.isEmpty()) return
+        val survivors = ArrayList<RenderRequest>(queue.size)
+        for (request in queue) {
+            val obsolete = request.generation != generation ||
+                (request.kind == RenderKind.PAGE &&
+                    ReaderScrollPolicy.isStale(request.page, focusedPage, DISPLAY_DISTANCE)) ||
+                (request.kind == RenderKind.THUMBNAIL && thumbnails.containsKey(request.page))
+            if (!obsolete) survivors += request
+        }
+        if (survivors.size == queue.size) return
+        queue.clear()
+        pendingPages.clear()
+        pendingThumbs.clear()
+        survivors.forEach { request ->
+            queue.add(request)
+            if (request.kind == RenderKind.PAGE) {
+                pendingPages[request.page] = request
+            } else {
+                pendingThumbs[request.page] = request
+            }
+        }
+    }
+
+    private fun releasePendingLocked(request: RenderRequest) {
+        val pendingMap = if (request.kind == RenderKind.PAGE) pendingPages else pendingThumbs
+        if (pendingMap[request.page] === request) pendingMap.remove(request.page)
+    }
+
+    private fun canRunLocked(request: RenderRequest): Boolean {
+        if (request.generation != generation) return true
+        if (!scrolling) return true
+        return ReaderScrollPolicy.runsWhileScrolling(
+            isPage = request.kind == RenderKind.PAGE,
+            distance = abs(request.page - focusedPage),
+        )
+    }
+
+    private fun clearQueue() {
+        synchronized(queueLock) {
+            queue.clear()
+            pendingPages.clear()
+            pendingThumbs.clear()
+        }
     }
 
     private suspend fun drainQueue() {
         while (true) {
-            val request = synchronized(queueLock) {
-                queue.poll()?.also { queuedPages.remove(it.generation to it.page) }
-            } ?: return
+            val request: RenderRequest = synchronized(queueLock) {
+                val head = queue.peek() ?: return
+                // Deferred work stays in the queue and resumes on settle rather
+                // than being polled and re-added on every frame.
+                if (!canRunLocked(head)) return
+                queue.poll()
+                releasePendingLocked(head)
+                head
+            }
             if (request.generation != generation || request.uri.toString() != loadedUri) continue
-            if (pages[request.page] != null && (renderedWidths[request.page] ?: 0) >= request.width) continue
-
-            // Pass one: publish a cheap but readable preview, then put the
-            // expensive full-width request at the back of the visible-window
-            // queue. Previously each page finished its full render before the
-            // next page got even a preview, producing white placeholders while
-            // scrolling.
-            if ((renderedWidths[request.page] ?: 0) == 0 && request.width > PREVIEW_WIDTH_PX) {
-                val previewReady = runCatching {
-                    repository.renderPreview(request.uri, request.page, PREVIEW_WIDTH_PX)
-                }.onSuccess { preview ->
-                    // Keep the readable preview so revisiting a page never
-                    // falls back to a page number while full quality catches up.
-                    publish(request.page, preview, PREVIEW_WIDTH_PX, request.generation, cache = true)
-                }
-                    .onFailure { error -> if (error is CancellationException) throw error }
-                    .isSuccess
-                if (previewReady) {
-                    synchronized(queueLock) {
-                        enqueueLocked(
-                            request.uri,
-                            request.page,
-                            request.width,
-                            request.generation,
-                            FULL_RENDER_PRIORITY + request.priority,
-                        )
-                    }
-                    continue
-                }
+            when (request.kind) {
+                RenderKind.THUMBNAIL -> runThumbnail(request)
+                RenderKind.PAGE -> runPageRender(request)
             }
-
-            // Pass two: the real render.
-            runCatching {
-                if (request.width <= PREVIEW_WIDTH_PX) {
-                    repository.renderPreview(request.uri, request.page, request.width)
-                } else {
-                    repository.render(request.uri, request.page, request.width)
-                }
-            }
-                .onSuccess { bitmap -> publish(request.page, bitmap, request.width, request.generation, cache = true) }
-                .onFailure { error ->
-                    if (error is CancellationException) throw error
-                    if (error is OutOfMemoryError) recoverFromOutOfMemory(request)
-                }
         }
+    }
+
+    private suspend fun runPageRender(request: RenderRequest) {
+        if (ReaderScrollPolicy.isStale(request.page, focusedPage, DISPLAY_DISTANCE)) return
+        if (pages[request.page] != null && (renderedWidths[request.page] ?: 0) >= request.width) return
+
+        // Pass one: publish a cheap but readable preview, then put the expensive
+        // full-width request at the back of the visible-window queue. Otherwise
+        // each page finishes its full render before the next page gets even a
+        // preview, which is what produces white placeholders while scrolling.
+        if ((renderedWidths[request.page] ?: 0) == 0 && request.width > PREVIEW_WIDTH_PX) {
+            val previewReady = runCatching {
+                repository.renderPreview(request.uri, request.page, PREVIEW_WIDTH_PX)
+            }.onSuccess { preview ->
+                publish(request.page, preview, PREVIEW_WIDTH_PX, request.generation, cache = true)
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+            }.isSuccess
+            if (previewReady) {
+                synchronized(queueLock) {
+                    enqueueLocked(
+                        request.uri,
+                        request.page,
+                        request.width,
+                        request.generation,
+                        FULL_RENDER_PRIORITY + request.priority,
+                        RenderKind.PAGE,
+                    )
+                }
+                wakeUp.trySend(Unit)
+                return
+            }
+        }
+
+        // Pass two: the real render.
+        runCatching {
+            if (request.width <= PREVIEW_WIDTH_PX) {
+                repository.renderPreview(request.uri, request.page, request.width)
+            } else {
+                repository.render(request.uri, request.page, request.width)
+            }
+        }
+            .onSuccess { bitmap ->
+                publish(request.page, bitmap, request.width, request.generation, cache = true)
+            }
+            .onFailure { error ->
+                if (error is CancellationException) throw error
+                if (error is OutOfMemoryError) recoverFromOutOfMemory(request)
+            }
+    }
+
+    private suspend fun runThumbnail(request: RenderRequest) {
+        if (thumbnails.containsKey(request.page)) return
+        runCatching { repository.thumbnail(request.uri, request.page) }
+            .onSuccess { bitmap ->
+                if (request.generation == generation) publishThumbnail(request.page, bitmap)
+            }
+            .onFailure { error ->
+                if (error is CancellationException) throw error
+                // Stop retrying a page that cannot be rasterized; the list item
+                // recomposes constantly and used to re-request it forever.
+                failedThumbnails[request.page] = true
+                if (error is OutOfMemoryError) releaseMemory(critical = true)
+            }
     }
 
     private suspend fun recoverFromOutOfMemory(request: RenderRequest) {
@@ -556,13 +716,9 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     private fun pruneDisplayedPages(centerPage: Int) {
-        Snapshot.withMutableSnapshot {
-            pages.keys
-                .filter { abs(it - centerPage) > DISPLAY_DISTANCE }
-                .forEach { page ->
-                    pages.remove(page)
-                }
-        }
+        val stale = pages.keys.filter { abs(it - centerPage) > DISPLAY_DISTANCE }
+        if (stale.isEmpty()) return
+        Snapshot.withMutableSnapshot { stale.forEach { page -> pages.remove(page) } }
     }
 
     /**
@@ -572,12 +728,18 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
      */
     private fun pruneTextLayers(centerPage: Int) {
         val keep: (Int) -> Boolean = { page -> abs(page - centerPage) <= TEXT_CACHE_DISTANCE }
-        _uiState.update { state ->
-            state.copy(
-                pageTexts = state.pageTexts.filterKeys(keep),
-                textRuns = state.textRuns.filterKeys(keep),
-                pageLinks = state.pageLinks.filterKeys(keep),
-            )
+        val current = _uiState.value
+        val needsPrune = current.pageTexts.keys.any { !keep(it) } ||
+            current.textRuns.keys.any { !keep(it) } ||
+            current.pageLinks.keys.any { !keep(it) }
+        if (needsPrune) {
+            _uiState.update { state ->
+                state.copy(
+                    pageTexts = state.pageTexts.filterKeys(keep),
+                    textRuns = state.textRuns.filterKeys(keep),
+                    pageLinks = state.pageLinks.filterKeys(keep),
+                )
+            }
         }
         textRequests.keys.filterNot(keep).forEach(textRequests::remove)
         linkRequests.keys.filterNot(keep).forEach(linkRequests::remove)
@@ -604,7 +766,6 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
                     bitmap.height.toFloat() / bitmap.width.coerceAtLeast(1)
             }
         }
-        evicted.forEach(thumbnailRequests::remove)
     }
 
     private fun renderWidth(width: Int): Int =
@@ -615,9 +776,10 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         if (critical) cache.clear() else cache.trimToBytes(CACHE_LOW_MEMORY_BYTES)
         repository.trimMemory()
         if (critical) {
+            clearQueue()
             textRequests.clear()
             linkRequests.clear()
-            thumbnailRequests.clear()
+            failedThumbnails.clear()
             synchronized(thumbnailOrderLock) { thumbnailOrder.clear() }
             Snapshot.withMutableSnapshot {
                 pages.keys.filter { it != focusedPage }.forEach { page ->
@@ -641,7 +803,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     private fun restartDocumentScope() {
         documentJob.cancel()
         documentJob = SupervisorJob()
-        documentScope = CoroutineScope(documentJob + Dispatchers.IO)
+        documentScope = CoroutineScope(documentJob + Dispatchers.Default)
     }
 
     /**
@@ -653,12 +815,13 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         generation++
         loadedUri = null
         loadedRevision = Int.MIN_VALUE
+        scrolling = false
         documentJob.cancel()
         searchJob = null
-        synchronized(queueLock) { queue.clear(); queuedPages.clear() }
+        clearQueue()
         textRequests.clear()
         linkRequests.clear()
-        thumbnailRequests.clear()
+        failedThumbnails.clear()
         synchronized(thumbnailOrderLock) { thumbnailOrder.clear() }
         Snapshot.withMutableSnapshot {
             pages.clear()
@@ -680,7 +843,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         wakeUp.close()
         documentJob.cancel()
         searchJob = null
-        synchronized(queueLock) { queue.clear(); queuedPages.clear() }
+        clearQueue()
         synchronized(thumbnailOrderLock) { thumbnailOrder.clear() }
         Snapshot.withMutableSnapshot { pages.clear(); thumbnails.clear(); pageAspectRatios.clear() }
         if (::cache.isInitialized) cache.clear()
@@ -704,9 +867,13 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
 
         const val PREVIEW_WIDTH_PX = 420
         const val FALLBACK_PREVIEW_WIDTH_PX = 280
+        const val THUMBNAIL_WIDTH_PX = 160
         const val CACHE_LOW_MEMORY_BYTES = 4 * 1024 * 1024
         const val FULL_RENDER_PRIORITY = 100
         const val IDLE_FULL_RENDER_PRIORITY = -100
+
+        /** Worse than any page work, so the grid never delays the reader. */
+        const val THUMBNAIL_PRIORITY = 10_000
         const val TEXT_CACHE_DISTANCE = 3
         const val MAX_UI_THUMBNAILS = 24
         const val MAX_SEARCH_RESULTS = 500

@@ -79,21 +79,40 @@ class ReadingProgressStore(
         }
     }
 
+    private fun identityFor(uri: Uri): ResolvedDocumentIdentity =
+        identities[uri.toString()]
+            ?: ResolvedDocumentIdentity(listOf(DocumentIdentityResolver.legacyUriKey(uri)))
+
     /**
      * Persists the current page synchronously so Android cannot lose it when
      * the task is swiped from Recents immediately after the reader stops.
      *
-     * The value is tiny and this is called only after a page settles, not for
-     * every scroll pixel.
+     * Reserved for ON_STOP and for leaving the reader. It must never run while
+     * the user is scrolling: commit() does a blocking fsync, and calling it for
+     * every page a fling passes froze the main thread for seconds at a time.
      */
     @SuppressLint("ApplySharedPref")
     fun checkpoint(uri: Uri, page: Int): Boolean {
         val uriString = uri.toString()
-        val identity = identities[uriString]
-            ?: ResolvedDocumentIdentity(listOf(DocumentIdentityResolver.legacyUriKey(uri)))
+        val identity = identityFor(uri)
         val updatedAt = System.currentTimeMillis()
         checkpointTimes[uriString] = updatedAt
         return writeJournal(identity, page, updatedAt, synchronous = true)
+    }
+
+    /**
+     * Non-blocking checkpoint used while reading.
+     *
+     * apply() keeps the value in memory immediately and lets Android flush it
+     * on its own background thread, which is all the reader needs between
+     * pages. The durable commit() still happens when the reader stops.
+     */
+    fun checkpointAsync(uri: Uri, page: Int) {
+        val uriString = uri.toString()
+        val identity = identityFor(uri)
+        val updatedAt = System.currentTimeMillis()
+        checkpointTimes[uriString] = updatedAt
+        writeJournal(identity, page, updatedAt, synchronous = false)
     }
 
     suspend fun syncToDatabase(uri: Uri, page: Int) = withContext(NonCancellable) {
