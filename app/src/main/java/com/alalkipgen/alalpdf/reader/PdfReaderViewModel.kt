@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.SystemClock
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateMap
@@ -18,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -80,7 +82,8 @@ data class PdfReaderUiState(
  * grid thumbnails - goes through this one queue. The previous version only
  * queued page renders and launched a separate unbounded coroutine for every
  * thumbnail, so scrolling quickly through a long document started one native
- * render per page that scrolled past, all of them fighting for the same lock.
+ * render per page that scrolled past, all of them fighting for the same lock
+ * and all of them holding an IO thread while they waited.
  */
 class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewModel() {
     private enum class RenderKind { PAGE, THUMBNAIL }
@@ -114,8 +117,9 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     )
 
     // Best pending request per page, so enqueueing is O(1) instead of a linear
-    // scan of the PriorityQueue on the main thread for every composed item.
-    // Superseded entries stay in the queue and are skipped when they are polled.
+    // scan of the PriorityQueue performed on the main thread for every list
+    // item that scrolls past. Superseded entries stay in the queue and are
+    // skipped when they are polled.
     private val pendingPages = HashMap<Int, RenderRequest>()
     private val pendingThumbs = HashMap<Int, RenderRequest>()
 
@@ -129,6 +133,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     private var documentJob: Job = SupervisorJob()
     private var documentScope = CoroutineScope(documentJob + Dispatchers.Default)
     private var searchJob: Job? = null
+    private var settleJob: Job? = null
 
     @Volatile private var generation = 0
     @Volatile private var loadedUri: String? = null
@@ -136,6 +141,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     @Volatile private var focusedPage = 0
     @Volatile private var scrollDirection = 1
     @Volatile private var scrolling = false
+    @Volatile private var lastFocusChangeAt = 0L
 
     private val memoryCallbacks = object : ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: Configuration) = Unit
@@ -171,11 +177,11 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     /**
-     * Told by the reader whether the list is currently moving.
+     * Whether the reader list is currently moving.
      *
      * A fling is the one moment where doing less work looks better: only the
      * page under the finger is rasterized, everything else waits in the queue
-     * and is dropped for free when it leaves the viewport.
+     * and is dropped for free once it leaves the viewport.
      */
     fun setScrolling(active: Boolean) {
         if (scrolling == active) return
@@ -183,6 +189,25 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         if (!active) {
             synchronized(queueLock) { compactLocked() }
             wakeUp.trySend(Unit)
+        }
+    }
+
+    /**
+     * Infers the fling phase from how fast the focused page is changing, so no
+     * extra wiring is needed in the reader UI. Several page changes within a
+     * couple of hundred milliseconds only ever happen during a fling.
+     */
+    private fun noteFocusChange(changed: Boolean) {
+        if (!changed) return
+        val now = SystemClock.uptimeMillis()
+        val previous = lastFocusChangeAt
+        lastFocusChangeAt = now
+        if (previous != 0L && now - previous <= FAST_SCROLL_THRESHOLD_MS) setScrolling(true)
+        if (!scrolling) return
+        settleJob?.cancel()
+        settleJob = viewModelScope.launch {
+            delay(SETTLE_DELAY_MS)
+            setScrolling(false)
         }
     }
 
@@ -207,7 +232,9 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         loadedUri = key
         loadedRevision = reloadToken
         focusedPage = initialPage.coerceAtLeast(0)
+        settleJob?.cancel()
         scrolling = false
+        lastFocusChangeAt = 0L
         clearQueue()
         searchJob = null
         textRequests.clear()
@@ -459,6 +486,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     }
 
     private fun requestWindow(uri: Uri, pageIndex: Int, width: Int, expectedGeneration: Int) {
+        noteFocusChange(pageIndex != focusedPage)
         scrollDirection = (pageIndex - focusedPage).coerceIn(-1, 1).takeIf { it != 0 } ?: scrollDirection
         focusedPage = pageIndex
         pruneDisplayedPages(pageIndex)
@@ -554,6 +582,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         return true
     }
 
+    /** Run once per gesture, when the list settles. */
     private fun compactLocked() {
         if (queue.isEmpty()) return
         val survivors = ArrayList<RenderRequest>(queue.size)
@@ -604,8 +633,8 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         while (true) {
             val request: RenderRequest = synchronized(queueLock) {
                 val head = queue.peek() ?: return
-                // Deferred work stays in the queue and resumes on settle rather
-                // than being polled and re-added on every frame.
+                // Deferred work stays in the queue and resumes when the list
+                // settles, instead of being polled and re-added every frame.
                 if (!canRunLocked(head)) return
                 queue.poll()
                 releasePendingLocked(head)
@@ -725,6 +754,9 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
      * Character geometry is substantially larger than rendered text. Keep only
      * the pages that can be selected now; revisiting a page reloads it through
      * the PDFium LRU instead of retaining the whole document in Compose state.
+     *
+     * The state copy only happens when something actually falls out of the
+     * window - it used to rebuild three maps on every single page change.
      */
     private fun pruneTextLayers(centerPage: Int) {
         val keep: (Int) -> Boolean = { page -> abs(page - centerPage) <= TEXT_CACHE_DISTANCE }
@@ -815,7 +847,9 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         generation++
         loadedUri = null
         loadedRevision = Int.MIN_VALUE
+        settleJob?.cancel()
         scrolling = false
+        lastFocusChangeAt = 0L
         documentJob.cancel()
         searchJob = null
         clearQueue()
@@ -841,6 +875,7 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
     override fun onCleared() {
         generation++
         wakeUp.close()
+        settleJob?.cancel()
         documentJob.cancel()
         searchJob = null
         clearQueue()
@@ -877,5 +912,14 @@ class PdfReaderViewModel(private val repository: PdfReaderRepository) : ViewMode
         const val TEXT_CACHE_DISTANCE = 3
         const val MAX_UI_THUMBNAILS = 24
         const val MAX_SEARCH_RESULTS = 500
+
+        /** Consecutive page changes this close together only happen in a fling. */
+        const val FAST_SCROLL_THRESHOLD_MS = 200L
+
+        /**
+         * Must stay below the reader's 250 ms extraction debounce so text and
+         * link requests are never dropped for being "mid-scroll".
+         */
+        const val SETTLE_DELAY_MS = 150L
     }
 }
