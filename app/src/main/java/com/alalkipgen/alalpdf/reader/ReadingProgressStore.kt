@@ -4,9 +4,12 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import com.alalkipgen.alalpdf.data.AlalPdfRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 class ReadingProgressStore(
     context: Context,
@@ -15,6 +18,8 @@ class ReadingProgressStore(
     private val identityResolver = DocumentIdentityResolver(context)
     private val identities = ConcurrentHashMap<String, ResolvedDocumentIdentity>()
     private val checkpointTimes = ConcurrentHashMap<String, Long>()
+    private val syncTokens = ConcurrentHashMap<String, Long>()
+    private val syncSequence = AtomicLong(0)
     private val preferences = context.applicationContext.getSharedPreferences(
         PREFERENCES_NAME,
         Context.MODE_PRIVATE,
@@ -73,39 +78,83 @@ class ReadingProgressStore(
             editor.putInt(pageKey(key), page.coerceAtLeast(0))
             editor.putLong(updatedAtKey(key), updatedAt)
         }
-        return if (synchronous) editor.commit() else {
+        return if (synchronous) {
+            editor.commit()
+        } else {
             editor.apply()
             true
         }
     }
 
+    private fun identityFor(uri: Uri): ResolvedDocumentIdentity =
+        identities[uri.toString()]
+            ?: ResolvedDocumentIdentity(listOf(DocumentIdentityResolver.legacyUriKey(uri)))
+
     /**
-     * Persists the current page synchronously so Android cannot lose it when
-     * the task is swiped from Recents immediately after the reader stops.
+     * Records the current page.
      *
-     * The value is tiny and this is called only after a page settles, not for
-     * every scroll pixel.
+     * This is called from `onPageSelected`, which fires for every page the
+     * viewport crosses. It used to call `SharedPreferences.commit()`, a
+     * blocking fsync, so flinging through a long document performed one
+     * synchronous disk write per page *on the main thread*. That is what made
+     * the scroll seize up and then the watchdog kill the process.
+     *
+     * `apply()` publishes the value to the in-memory map immediately - so any
+     * subsequent [page] read sees it - and Android's QueuedWork forces the
+     * flush to complete at the next activity lifecycle transition, which is
+     * exactly when durability actually matters.
      */
-    @SuppressLint("ApplySharedPref")
     fun checkpoint(uri: Uri, page: Int): Boolean {
         val uriString = uri.toString()
-        val identity = identities[uriString]
-            ?: ResolvedDocumentIdentity(listOf(DocumentIdentityResolver.legacyUriKey(uri)))
+        val identity = identityFor(uri)
+        val updatedAt = System.currentTimeMillis()
+        checkpointTimes[uriString] = updatedAt
+        return writeJournal(identity, page, updatedAt, synchronous = false)
+    }
+
+    /** Alias kept for call sites that want to state the intent explicitly. */
+    fun checkpointAsync(uri: Uri, page: Int) {
+        checkpoint(uri, page)
+    }
+
+    /**
+     * Hard fsync variant. Only worth using off the scroll path, for example
+     * before handing the document to another process.
+     */
+    @SuppressLint("ApplySharedPref")
+    fun checkpointBlocking(uri: Uri, page: Int): Boolean {
+        val uriString = uri.toString()
+        val identity = identityFor(uri)
         val updatedAt = System.currentTimeMillis()
         checkpointTimes[uriString] = updatedAt
         return writeJournal(identity, page, updatedAt, synchronous = true)
     }
 
-    suspend fun syncToDatabase(uri: Uri, page: Int) = withContext(NonCancellable) {
-        val uriString = uri.toString()
-        val identity = identities[uriString] ?: identityResolver.resolve(uri).also {
-            identities[uriString] = it
+    /**
+     * Mirrors the checkpoint into Room.
+     *
+     * Two changes matter here. The dispatcher is pinned instead of inherited:
+     * callers use `rememberCoroutineScope()`, whose dispatcher is Main, so
+     * every page change previously ran the Room writes on the UI thread.
+     * And consecutive calls are debounced, because crossing thirty pages only
+     * needs the last position to reach the database.
+     */
+    suspend fun syncToDatabase(uri: Uri, page: Int) =
+        withContext(Dispatchers.IO + NonCancellable) {
+            val uriString = uri.toString()
+            val token = syncSequence.incrementAndGet()
+            syncTokens[uriString] = token
+            delay(SYNC_DEBOUNCE_MS)
+            if (syncTokens[uriString] != token) return@withContext
+
+            val identity = identities[uriString] ?: identityResolver.resolve(uri).also {
+                identities[uriString] = it
+            }
+            val updatedAt = checkpointTimes[uriString] ?: System.currentTimeMillis()
+            repository.saveReadingProgress(identity.keys, uri, page, updatedAt)
+            // Keep the library's progress indicator compatible with existing rows.
+            repository.savePage(uri, page.coerceAtLeast(0))
         }
-        val updatedAt = checkpointTimes[uriString] ?: System.currentTimeMillis()
-        repository.saveReadingProgress(identity.keys, uri, page, updatedAt)
-        // Keep the library's progress indicator compatible with existing rows.
-        repository.savePage(uri, page.coerceAtLeast(0))
-    }
 
     private data class ProgressRecord(val page: Int, val updatedAt: Long)
 
@@ -119,5 +168,8 @@ class ReadingProgressStore(
         const val UPDATED_AT_KEY_PREFIX = "v2-updated:"
         const val LEGACY_PAGE_KEY_PREFIX = "page:"
         const val PAGE_NOT_SET = -1
+
+        /** Long enough to absorb a fling, short enough to survive a back press. */
+        const val SYNC_DEBOUNCE_MS = 350L
     }
 }
