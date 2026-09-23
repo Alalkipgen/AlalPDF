@@ -1,5 +1,10 @@
 # AlalPDF Overhaul — Progress Tracker
 
+> **Current performance work:** The v0.3.7-beta library-scroll, thumbnail
+> memory, main-thread I/O and semantic-haptics pass is tracked in
+> [`UI_PERFORMANCE_PLAN.md`](UI_PERFORMANCE_PLAN.md). Read that file first when
+> recovering this work.
+
 > **Current reader work:** Phase 1–4 persistence, memory and diagnostics are
 > tracked in [`READER_STABILITY_PLAN.md`](READER_STABILITY_PLAN.md). Read that
 > file first for v0.3.6-beta recovery and verification status.

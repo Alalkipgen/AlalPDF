@@ -51,6 +51,7 @@ import com.alalkipgen.alalpdf.library.LibraryPrefs
 import com.alalkipgen.alalpdf.library.LibraryScreen
 import com.alalkipgen.alalpdf.library.LibraryViewModel
 import com.alalkipgen.alalpdf.library.PdfLibraryRepository
+import com.alalkipgen.alalpdf.library.PdfThumbnails
 import com.alalkipgen.alalpdf.library.RecentDocumentsStore
 import com.alalkipgen.alalpdf.reader.PdfPrinter
 import com.alalkipgen.alalpdf.reader.PdfReaderRepository
@@ -71,6 +72,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppExitDiagnostics.install(applicationContext)
+        PdfThumbnails.initialize(applicationContext)
         incomingPdf = intent.pdfUri()
         setContent {
             var mode by rememberSaveable { mutableStateOf(ThemeMode.SYSTEM.name) }
@@ -345,8 +347,18 @@ private fun ReaderRoute(
     val appContext = context.applicationContext
     val scope = rememberCoroutineScope()
 
-    if (!libraryRepository.canRead(uri)) {
-        Text("This PDF permission is no longer available. Please open it again.")
+    var readable by remember(uri) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(uri) {
+        readable = libraryRepository.canReadAsync(uri)
+    }
+    if (readable != true) {
+        Text(
+            if (readable == false) {
+                "This PDF permission is no longer available. Please open it again."
+            } else {
+                "Opening PDF\u2026"
+            }
+        )
         return
     }
 

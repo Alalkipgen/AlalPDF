@@ -1,23 +1,32 @@
-# Alal PDF v0.3.6-beta
+# Alal PDF v0.3.7-beta
 
-## Fixes
+## Performance and stability
 
-- Fixed the cold-start race that clamped a saved reading position to page 1
-  before the PDF page count was available.
-- Reading progress now uses a dedicated Room table, timestamps and stable
-  document aliases, with a non-destructive migration from v0.3.5.
-- Reader jobs now belong to one cancellable document scope and all PDFium calls
-  are serialized process-wide.
-- Text geometry, links, search results and UI thumbnails are bounded to prevent
-  long-document memory growth.
-- Reader state and native resources are fully cleared when a document closes.
-- The app records the previous Android exit reason locally, distinguishing
-  Java/native crashes, ANRs and low-memory kills without network telemetry.
+- Fixed library-scroll memory growth by replacing the 48-entry PDF thumbnail
+  cache with a byte-bounded 4–12 MiB LRU cache.
+- First-page previews now render at their actual on-screen size and are retained
+  as RGB_565, substantially reducing per-row bitmap memory.
+- Native thumbnail rendering is limited to two jobs and pauses during active
+  flings, preventing background PDF work from competing with scroll frames.
+- Thumbnail memory is trimmed when Android reports low-memory or background
+  pressure, and an allocation failure now falls back to the placeholder instead
+  of terminating the app.
+- Recent-file readability checks and reader permission checks no longer block
+  the Compose main thread.
+- Library rows now provide stable keys and content types for more efficient
+  lazy-list composition reuse.
+
+## Haptics
+
+- Replaced heavy long-press vibration on normal taps, toggles and scrollbar
+  gestures with semantic system haptics.
+- Added consistent light feedback to library filters, file actions and create
+  actions while respecting the device's touch-feedback setting.
 
 ## Version
 
-- Version name: `0.3.6-beta`
-- Version code: `14`
+- Version name: `0.3.7-beta`
+- Version code: `15`
 - Minimum Android: Android 8.0 (API 26)
 
 Alal PDF works offline and does not request the Android `INTERNET` permission.

@@ -64,9 +64,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,7 +79,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.alalkipgen.alalpdf.create.CreatePdfMode
+import com.alalkipgen.alalpdf.ui.rememberAppHaptics
 import com.alalkipgen.alalpdf.ui.theme.ThemeMode
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.roundToInt
 
 private enum class LibraryFilter(val label: String) {
@@ -106,6 +111,7 @@ fun LibraryScreen(
     onDelete: (PdfDocument) -> Unit,
     onRename: (PdfDocument, String) -> Unit,
 ) {
+    val haptics = rememberAppHaptics()
     var sortMenuOpen by remember { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
     var createMenuOpen by remember { mutableStateOf(false) }
@@ -114,6 +120,20 @@ fun LibraryScreen(
     var detailsFor by remember { mutableStateOf<PdfDocument?>(null) }
     var renameFor by remember { mutableStateOf<PdfDocument?>(null) }
     var deleteFor by remember { mutableStateOf<PdfDocument?>(null) }
+    var thumbnailLoadingEnabled by remember { mutableStateOf(true) }
+
+    // Keep native PDF work out of active fling frames. Cached previews remain
+    // visible and new rows fill in just after scrolling settles.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collectLatest { scrolling ->
+            if (scrolling) {
+                thumbnailLoadingEnabled = false
+            } else {
+                delay(120)
+                thumbnailLoadingEnabled = true
+            }
+        }
+    }
 
     val documents = remember(state.documents, query, filter) {
         state.documents
@@ -168,7 +188,13 @@ fun LibraryScreen(
                     modifier = Modifier.weight(1f),
                 )
                 Box {
-                    IconButton(onClick = { sortMenuOpen = true }, modifier = Modifier.size(48.dp)) {
+                    IconButton(
+                        onClick = {
+                            haptics.tick()
+                            sortMenuOpen = true
+                        },
+                        modifier = Modifier.size(48.dp),
+                    ) {
                         Icon(Icons.Default.SwapVert, contentDescription = "Sort files")
                     }
                     DropdownMenu(expanded = sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {
@@ -180,13 +206,23 @@ fun LibraryScreen(
                                 leadingIcon = {
                                     if (sort == state.sort) Icon(Icons.Default.Check, contentDescription = null)
                                 },
-                                onClick = { onSortChange(sort); sortMenuOpen = false },
+                                onClick = {
+                                    haptics.confirm()
+                                    onSortChange(sort)
+                                    sortMenuOpen = false
+                                },
                             )
                         }
                     }
                 }
                 Box {
-                    IconButton(onClick = { overflowOpen = true }, modifier = Modifier.size(48.dp)) {
+                    IconButton(
+                        onClick = {
+                            haptics.tick()
+                            overflowOpen = true
+                        },
+                        modifier = Modifier.size(48.dp),
+                    ) {
                         Icon(Icons.Default.MoreVert, contentDescription = "More options")
                     }
                     DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
@@ -223,7 +259,12 @@ fun LibraryScreen(
                 LibraryFilter.entries.forEach { entry ->
                     FilterChip(
                         selected = filter == entry,
-                        onClick = { filter = entry },
+                        onClick = {
+                            if (filter != entry) {
+                                haptics.tick()
+                                filter = entry
+                            }
+                        },
                         label = { Text(entry.label) },
                         leadingIcon = {
                             if (filter == entry) {
@@ -263,7 +304,7 @@ fun LibraryScreen(
                         contentPadding = PaddingValues(bottom = 110.dp),
                     ) {
                         if (filter == LibraryFilter.ALL && query.isBlank()) {
-                            item(key = "quick-actions") {
+                            item(key = "quick-actions", contentType = "quick-actions") {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     QuickActionCard("Scan this phone", "Find every PDF", Icons.Default.PhoneAndroid,
                                         MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary, onScanDevice)
@@ -273,15 +314,20 @@ fun LibraryScreen(
                             }
                         }
                         state.statusMessage?.let { message ->
-                            item(key = "status-message") {
+                            item(key = "status-message", contentType = "message") {
                                 Text(message, style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary)
                             }
                         }
-                        item(key = "files-header") { SectionLabel("PDF FILES") }
-                        items(documents, key = { it.uri.toString() }) { document ->
+                        item(key = "files-header", contentType = "header") { SectionLabel("PDF FILES") }
+                        items(
+                            items = documents,
+                            key = { it.uri.toString() },
+                            contentType = { "pdf-document" },
+                        ) { document ->
                             DocumentRow(document, onOpenDocument, onToggleFavorite,
-                                { detailsFor = it }, { renameFor = it }, { deleteFor = it }, onRemoveFromList)
+                                { detailsFor = it }, { renameFor = it }, { deleteFor = it },
+                                onRemoveFromList, thumbnailLoadingEnabled)
                         }
                     }
                 }
@@ -339,6 +385,7 @@ private fun CreateFabMenu(
     onExpandedChange: (Boolean) -> Unit,
     onPick: (CreatePdfMode) -> Unit,
 ) {
+    val haptics = rememberAppHaptics()
     Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         AnimatedVisibility(
             visible = expanded,
@@ -346,19 +393,37 @@ private fun CreateFabMenu(
             exit = fadeOut() + scaleOut(),
         ) {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                FabMenuItem("Scan PDF", Icons.Default.DocumentScanner) { onPick(CreatePdfMode.SCAN) }
-                FabMenuItem("Text + Image", Icons.Default.NoteAdd) { onPick(CreatePdfMode.IMAGE_TEXT) }
-                FabMenuItem("Image PDF", Icons.Default.PhotoLibrary) { onPick(CreatePdfMode.IMAGES) }
-                FabMenuItem("Text PDF", Icons.Default.TextFields) { onPick(CreatePdfMode.TEXT) }
+                FabMenuItem("Scan PDF", Icons.Default.DocumentScanner) {
+                    haptics.confirm()
+                    onPick(CreatePdfMode.SCAN)
+                }
+                FabMenuItem("Text + Image", Icons.Default.NoteAdd) {
+                    haptics.confirm()
+                    onPick(CreatePdfMode.IMAGE_TEXT)
+                }
+                FabMenuItem("Image PDF", Icons.Default.PhotoLibrary) {
+                    haptics.confirm()
+                    onPick(CreatePdfMode.IMAGES)
+                }
+                FabMenuItem("Text PDF", Icons.Default.TextFields) {
+                    haptics.confirm()
+                    onPick(CreatePdfMode.TEXT)
+                }
             }
         }
         if (expanded) {
-            FloatingActionButton(onClick = { onExpandedChange(false) }) {
+            FloatingActionButton(onClick = {
+                haptics.tick()
+                onExpandedChange(false)
+            }) {
                 Icon(Icons.Default.Close, contentDescription = "Close create menu")
             }
         } else {
             ExtendedFloatingActionButton(
-                onClick = { onExpandedChange(true) },
+                onClick = {
+                    haptics.tick()
+                    onExpandedChange(true)
+                },
                 icon = { Icon(Icons.Default.Add, contentDescription = null) },
                 text = { Text("Create PDF") },
             )
@@ -400,8 +465,12 @@ private fun RowScope.QuickActionCard(
     accent: Color,
     onClick: () -> Unit,
 ) {
+    val haptics = rememberAppHaptics()
     Card(
-        onClick = onClick,
+        onClick = {
+            haptics.confirm()
+            onClick()
+        },
         modifier = Modifier.weight(1f),
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = container),
@@ -438,26 +507,39 @@ private fun RowScope.QuickActionCard(
     onRename: (PdfDocument) -> Unit,
     onDelete: (PdfDocument) -> Unit,
     onRemoveFromList: (PdfDocument) -> Unit,
+    thumbnailLoadingEnabled: Boolean,
 ) {
+    val haptics = rememberAppHaptics()
     var menuOpen by remember { mutableStateOf(false) }
+    val metadata = remember(document.sizeBytes, document.pageCount, document.lastModified) {
+        listOfNotNull(
+            formatBytes(document.sizeBytes).takeIf { it.isNotBlank() },
+            (document.pageCount.toString() + " pages").takeIf { document.pageCount > 0 },
+            formatDate(document.lastModified).takeIf { it.isNotBlank() },
+        ).joinToString(" \u00b7 ")
+    }
     Card(
-        onClick = { onOpen(document) },
+        onClick = {
+            haptics.confirm()
+            onOpen(document)
+        },
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            PdfThumbnail(document.uri, 48.dp, 60.dp)
+            PdfThumbnail(
+                uri = document.uri,
+                width = 48.dp,
+                height = 60.dp,
+                loadEnabled = thumbnailLoadingEnabled,
+            )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(document.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
                 Text(
-                    listOfNotNull(
-                        formatBytes(document.sizeBytes).takeIf { it.isNotBlank() },
-                        (document.pageCount.toString() + " pages").takeIf { document.pageCount > 0 },
-                        formatDate(document.lastModified).takeIf { it.isNotBlank() },
-                    ).joinToString(" \u00b7 "),
+                    metadata,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -478,7 +560,13 @@ private fun RowScope.QuickActionCard(
                     }
                 }
             }
-            IconButton(onClick = { onToggleFavorite(document) }, modifier = Modifier.size(48.dp)) {
+            IconButton(
+                onClick = {
+                    haptics.tick()
+                    onToggleFavorite(document)
+                },
+                modifier = Modifier.size(48.dp),
+            ) {
                 Icon(
                     Icons.Default.Star,
                     contentDescription = if (document.favorite) "Remove from favorites" else "Add to favorites",
@@ -487,7 +575,13 @@ private fun RowScope.QuickActionCard(
                 )
             }
             Box {
-                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
+                IconButton(
+                    onClick = {
+                        haptics.tick()
+                        menuOpen = true
+                    },
+                    modifier = Modifier.size(48.dp),
+                ) {
                     Icon(Icons.Default.MoreVert, contentDescription = "File options")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {

@@ -29,15 +29,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
+import com.alalkipgen.alalpdf.ui.rememberAppHaptics
 import java.text.BreakIterator
 import kotlin.math.abs
 import kotlin.math.max
@@ -69,7 +68,7 @@ fun SelectionLayer(
 ) {
     if (runs.isEmpty()) return
     val context = LocalContext.current
-    val haptics = LocalHapticFeedback.current
+    val haptics = rememberAppHaptics()
     val density = LocalDensity.current
 
     val charMode = runs.first().character
@@ -158,7 +157,7 @@ fun SelectionLayer(
                 onDragStart = { position ->
                     val index = indexAt(position)
                     if (index >= 0) {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        haptics.longPress()
                         selectWordAt(index)
                         dragging = DragTarget.END
                     }

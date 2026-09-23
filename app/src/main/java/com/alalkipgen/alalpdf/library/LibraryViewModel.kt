@@ -79,7 +79,7 @@ class LibraryViewModel(
         if (recentJob != null) return
         recentJob = viewModelScope.launch {
             recentStore.recent.collect { documents ->
-                val (readable, stale) = documents.partition { repository.canRead(it.uri) }
+                val (readable, stale) = repository.partitionReadable(documents)
                 stale.forEach { recentStore.remove(it.uri) }
                 recentDocuments = readable
                 publish()
@@ -117,7 +117,8 @@ class LibraryViewModel(
     fun delete(document: PdfDocument) {
         viewModelScope.launch {
             val deleted = runCatching { repository.delete(document.uri) }.getOrDefault(false)
-            if (deleted || !repository.canRead(document.uri)) {
+            val stillReadable = if (deleted) false else repository.canReadAsync(document.uri)
+            if (deleted || !stillReadable) {
                 val aliases = (recentDocuments + scannedDocuments + deviceDocuments)
                     .filter { it.canonicalKey == document.canonicalKey }
                 scannedDocuments = scannedDocuments.filterNot { it.canonicalKey == document.canonicalKey }

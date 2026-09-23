@@ -89,6 +89,16 @@ class PdfLibraryRepository(private val context: Context) {
         false
     }
 
+    suspend fun canReadAsync(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        canRead(uri)
+    }
+
+    suspend fun partitionReadable(
+        documents: List<PdfDocument>,
+    ): Pair<List<PdfDocument>, List<PdfDocument>> = withContext(Dispatchers.IO) {
+        documents.partition { canRead(it.uri) }
+    }
+
     fun hasPersistedReadPermission(uri: Uri): Boolean {
         val target = uri.toString()
         return resolver.persistedUriPermissions.any {

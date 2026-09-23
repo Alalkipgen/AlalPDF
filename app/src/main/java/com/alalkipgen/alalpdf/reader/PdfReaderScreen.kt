@@ -90,18 +90,17 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.alalkipgen.alalpdf.ui.rememberAppHaptics
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -142,7 +141,7 @@ fun PdfReaderScreen(
     var restoreTarget by remember { mutableIntStateOf(initialPage.coerceAtLeast(0)) }
     var pageSelectionEnabled by remember { mutableStateOf(false) }
     val horizontalScroll = rememberScrollState()
-    val haptics = LocalHapticFeedback.current
+    val haptics = rememberAppHaptics()
     val view = LocalView.current
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -333,7 +332,7 @@ fun PdfReaderScreen(
                                     .fillMaxWidth()
                                     .height(150.dp)
                                     .clickable {
-                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        haptics.confirm()
                                         requestedPage = index
                                         thumbsOpen = false
                                     },
@@ -437,7 +436,7 @@ fun PdfReaderScreen(
                                 // read; the next tap brings it back.
                                 onTap = { fullScreen = !fullScreen },
                                 onDoubleTap = { tap ->
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptics.gestureStart()
                                     val previous = scale
                                     val next = if (previous > 1f) 1f else 2.5f
                                     val ratio = next / previous
@@ -580,7 +579,7 @@ fun PdfReaderScreen(
                             IconButton(onClick = onEditPdf) { Icon(Icons.Default.Edit, "Edit PDF") }
                             IconButton(
                                 onClick = {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptics.tick()
                                     onNightModeChange(!nightMode)
                                 },
                                 colors = if (nightMode) {
@@ -620,7 +619,7 @@ fun PdfReaderScreen(
                                         text = { Text("Add bookmark") },
                                         onClick = {
                                             menuOpen = false
-                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            haptics.confirm()
                                             onAddBookmark()
                                         },
                                     )
@@ -707,11 +706,11 @@ fun PdfReaderScreen(
                                 onDragStarted = {
                                     dragFraction = if (lastIndex == 0) 0f else visiblePage.toFloat() / lastIndex
                                     thumbDragging = true
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptics.gestureStart()
                                 },
                                 onDragStopped = {
                                     thumbDragging = false
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    haptics.gestureEnd()
                                 },
                             ),
                     ) {
