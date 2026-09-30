@@ -10,6 +10,10 @@ val releaseKeystorePassword = System.getenv("ALALPDF_KEYSTORE_PASSWORD")
 val releaseKeyAlias = System.getenv("ALALPDF_KEY_ALIAS")
 val releaseKeyPassword = System.getenv("ALALPDF_KEY_PASSWORD")
 val hasReleaseCredentials = listOf(releaseKeystorePath, releaseKeystorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
+val requireReleaseSigning = System.getenv("REQUIRE_RELEASE_SIGNING") == "true"
+if (requireReleaseSigning && !hasReleaseCredentials) {
+    throw GradleException("Permanent release signing credentials are required")
+}
 
 android { namespace = "com.alalkipgen.alalpdf"; compileSdk = 35
     defaultConfig { applicationId = "com.alalkipgen.alalpdf"; minSdk = 26; targetSdk = 35; versionCode = 16; versionName = "0.3.8-beta"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
