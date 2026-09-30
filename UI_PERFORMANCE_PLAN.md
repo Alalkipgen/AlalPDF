@@ -1,4 +1,4 @@
-# Alal PDF v0.3.7-beta — UI performance and crash recovery
+# PDF Reader v0.3.7-beta — UI performance and crash recovery
 
 This file is the recovery checkpoint for the library-scroll and haptic pass.
 

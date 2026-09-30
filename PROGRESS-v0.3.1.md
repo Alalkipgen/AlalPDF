@@ -1,4 +1,4 @@
-# Alal PDF v0.3.1 Progress
+# PDF Reader v0.3.1 Progress
 Base: 6259c2f13182817de397cba2e8e492082fb0e85f
 Branch: fix/v0.3.1-links-save-quality
 Backup: backup/pre-v031-20260921-131926

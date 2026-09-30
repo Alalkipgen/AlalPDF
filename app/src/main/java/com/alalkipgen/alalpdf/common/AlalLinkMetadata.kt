@@ -12,7 +12,7 @@ data class AlalStoredLink(
 )
 
 /**
- * Compact, version-independent storage for links created by Alal PDF.
+ * Compact, version-independent storage for links created by PDF Reader.
  * Coordinates are normalized to the top-left 0..1 page space.
  */
 object AlalLinkMetadata {

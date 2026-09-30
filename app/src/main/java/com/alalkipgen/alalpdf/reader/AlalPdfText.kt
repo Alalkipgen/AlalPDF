@@ -8,7 +8,7 @@ import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 
 /**
- * Reads the plain page text that Alal PDF stores in its own documents.
+ * Reads the plain page text that PDF Reader stores in its own documents.
  *
  * Text drawn by Android is shaped correctly but its ToUnicode table maps one
  * glyph to one code point, so extracting Burmese from it loses medials and

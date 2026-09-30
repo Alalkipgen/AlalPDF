@@ -1,6 +1,6 @@
-# Alal PDF
+# PDF Reader
 
-Alal PDF is an offline-first PDF reader for Android with local reading progress, bookmarks, themes, page navigation, and sharing.
+PDF Reader is an offline-first PDF reader for Android with local reading progress, bookmarks, themes, page navigation, and sharing.
 
 ## Features
 
@@ -50,4 +50,4 @@ The project uses Kotlin, Kotlin Coroutines, AndroidX Core/Activity/Lifecycle/Com
 
 ## Release installation
 
-Download the signed APK from the release assets, allow installation from the selected source when Android prompts, install it, and launch **Alal PDF**. For local testing, `./gradlew assembleRelease` writes the APK to `app/build/outputs/apk/release/`. Production APKs must be signed with a private release key; never commit that key or its passwords.
+Download the signed APK from the release assets, allow installation from the selected source when Android prompts, install it, and launch **PDF Reader**. For local testing, `./gradlew assembleRelease` writes the APK to `app/build/outputs/apk/release/`. Production APKs must be signed with a private release key; never commit that key or its passwords.

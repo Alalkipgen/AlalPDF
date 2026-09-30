@@ -12,7 +12,7 @@ import kotlin.math.roundToInt
 data class PdfPageLink(val left: Float, val top: Float, val right: Float, val bottom: Float, val url: String)
 
 /**
- * Compatibility path for external PDFs and Alal PDFs made before link metadata
+ * Compatibility path for external PDFs and PDF Reader documents made before link metadata
  * was introduced. The PDFBox document exists only for this call.
  *
  * [extractDocument] is the entry point the reader uses. The previous per-page

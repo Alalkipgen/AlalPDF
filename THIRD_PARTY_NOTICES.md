@@ -1,7 +1,7 @@
 # Third-party notices
 
 ## Pyidaungsu 2.5.3
-Alal PDF bundles Pyidaungsu Regular and Bold from the Myanmar Computer Federation under the SIL Open Font License.
+PDF Reader bundles Pyidaungsu Regular and Bold from the Myanmar Computer Federation under the SIL Open Font License.
 
 Sources:
 - https://mcf.org.mm/pyidaungsu-font
@@ -9,7 +9,7 @@ Sources:
 
 The SIL Open Font License 1.1 requires that the font is distributed with this
 notice, that it is not sold on its own, and that any modified version is not
-released under the reserved name "Pyidaungsu". Alal PDF bundles the fonts
+released under the reserved name "Pyidaungsu". PDF Reader bundles the fonts
 unmodified. Full licence text: https://openfontlicense.org/
 
 ## myanmar-tools 1.2.0

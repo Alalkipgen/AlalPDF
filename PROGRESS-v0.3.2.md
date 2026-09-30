@@ -1,4 +1,4 @@
-# Alal PDF v0.3.2 Hotfix
+# PDF Reader v0.3.2 Hotfix
 Base: cd2ba9da80a3e9f14661a495a8ad206db309e70b
 Backup: backup/pre-v032-20260921-144308
 - [x] Visible-page focus, quality, links and preview retention

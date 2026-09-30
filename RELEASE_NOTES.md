@@ -1,4 +1,4 @@
-# Alal PDF v0.3.7-beta
+# PDF Reader v0.3.7-beta
 
 ## Performance and stability
 
@@ -29,4 +29,4 @@
 - Version code: `15`
 - Minimum Android: Android 8.0 (API 26)
 
-Alal PDF works offline and does not request the Android `INTERNET` permission.
+PDF Reader works offline and does not request the Android `INTERNET` permission.

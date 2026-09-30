@@ -129,7 +129,7 @@ class LibraryViewModel(
                 }
                 publish(status = if (deleted) "Deleted ${document.name}" else "Removed missing file")
             } else {
-                publish(status = "This file cannot be deleted from Alal PDF")
+                publish(status = "This file cannot be deleted from PDF Reader")
             }
         }
     }

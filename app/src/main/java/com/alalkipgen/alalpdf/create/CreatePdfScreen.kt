@@ -213,7 +213,7 @@ enum class CreatePdfMode { TEXT, IMAGES, IMAGE_TEXT, SCAN }
         }
     }
     LaunchedEffect(mode) {
-        // Existing Alal documents already have reconstructed page assets.
+        // Existing app-created documents already have reconstructed page assets.
         // Never open a picker/camera automatically while entering edit mode.
         if (draft == null && mode == CreatePdfMode.IMAGES && imageStrings.isEmpty()) {
             images.launch(arrayOf("image/*"))

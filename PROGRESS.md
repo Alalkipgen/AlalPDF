@@ -1,4 +1,4 @@
-# AlalPDF Overhaul — Progress Tracker
+# PDF Reader Overhaul — Progress Tracker
 
 > **Current performance work:** The v0.3.7-beta library-scroll, thumbnail
 > memory, main-thread I/O and semantic-haptics pass is tracked in

@@ -97,7 +97,7 @@ class PdfReaderRepository(private val context: Context) {
             }
         }
 
-    /** Plain text stored by Alal PDF itself, which is always exact. */
+    /** Plain text stored by PDF Reader itself, which is always exact. */
     private fun storedPageText(uri: Uri, page: Int): String? = storedContent(uri).pageTexts[page]
 
     private fun storedContent(uri: Uri): AlalPdfStoredContent = synchronized(metadataLock) {

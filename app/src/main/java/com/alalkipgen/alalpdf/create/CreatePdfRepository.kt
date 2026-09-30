@@ -282,7 +282,7 @@ class CreatePdfRepository(private val context: Context) {
     /**
      * Original image URIs may have expired and scans are intentionally removed
      * after saving. Reconstruct only the image/scan pages as local edit assets,
-     * so every Alal creation mode can reopen in its original Create UI.
+     * so every app creation mode can reopen in its original Create UI.
      */
     private fun renderDraftPages(uri: Uri, firstPage: Int): List<String> {
         val root = File(context.cacheDir, "edit-page-assets").apply { mkdirs() }
