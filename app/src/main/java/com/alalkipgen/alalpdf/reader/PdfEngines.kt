@@ -7,6 +7,9 @@ import android.os.ParcelFileDescriptor
 import android.util.SizeF
 import androidx.annotation.VisibleForTesting
 import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import java.io.Closeable
 import java.io.File
 
@@ -41,8 +44,9 @@ internal interface PdfTextEngine : Closeable {
  * The only long-lived owner of read engines for one URI.
  *
  * PDFBox unlocks an encrypted document into a temporary file before either
- * read engine opens that file. Links and stored metadata are read through
- * [pdfBox], the one PDFBox document of this session, which closes with it.
+ * read engine opens that file. Links, stored metadata and the text of
+ * Myanmar pages are read through [pdfBox], the one PDFBox document of this
+ * session, which closes with it.
  */
 internal class PdfDocumentSession @VisibleForTesting internal constructor(
     private val context: Context,
@@ -56,8 +60,14 @@ internal class PdfDocumentSession @VisibleForTesting internal constructor(
     private var textEngine: PdfTextEngine? = null
     @Volatile private var closed = false
 
-    /** Shared PDFBox document for links and stored metadata; loaded on first use. */
+    /** Shared PDFBox document for links, stored metadata and Myanmar text; loaded on first use. */
     val pdfBox: PdfBoxDocument = PdfBoxDocument.forSession(context, uri, password, unlockedFile)
+
+    /** Recent Myanmar text layers by page, including pages that have none. Guarded by itself. */
+    private val textLayers = object : LinkedHashMap<Int, TextLayer>(TEXT_LAYER_PAGES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, TextLayer>): Boolean =
+            size > TEXT_LAYER_PAGES
+    }
 
     val pageCount: Int
         get() = synchronized(renderLock) {
@@ -102,8 +112,44 @@ internal class PdfDocumentSession @VisibleForTesting internal constructor(
         textEngine = null
     }
 
-    /** Release the parsed PDFBox document under memory pressure; it reloads on next use. */
-    fun trimPdfBox() = pdfBox.trim()
+    /**
+     * Text and selection runs from PDFBox for a page whose PDFium text has
+     * Myanmar, or null when PDFium's text stays in use: no Myanmar on the
+     * page, a PDFBox failure or timeout, blank PDFBox text, or a closed
+     * session. See [PdfBoxTextSource] for why PDFium's Myanmar text is wrong.
+     */
+    suspend fun myanmarTextLayer(page: Int, pdfiumText: String): AssembledPageText? {
+        if (closed || !MyanmarText.hasMyanmar(pdfiumText)) return null
+        cachedTextLayer(page)?.let { return it.text }
+        val coroutine = currentCoroutineContext()
+        val layer = try {
+            pdfBox.read { document ->
+                // Another caller may have read this page while this one waited for the lock.
+                cachedTextLayer(page) ?: TextLayer(
+                    PdfBoxTextSource.extract(document, page, isActive = { coroutine.isActive })
+                        .takeIf { it.text.isNotBlank() },
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            TextLayer(null)
+        }
+        // A page read while the session was closing is not cached.
+        if (!closed) synchronized(textLayers) { textLayers[page] = layer }
+        return layer.text
+    }
+
+    private fun cachedTextLayer(page: Int): TextLayer? = synchronized(textLayers) { textLayers[page] }
+
+    /**
+     * Release the parsed PDFBox document and the cached text layers under
+     * memory pressure; both are read again on next use.
+     */
+    fun trimPdfBox() {
+        synchronized(textLayers) { textLayers.clear() }
+        pdfBox.trim()
+    }
 
     private fun openTextEngine(): PdfTextEngine? {
         textEngine?.let { return it }
@@ -124,6 +170,7 @@ internal class PdfDocumentSession @VisibleForTesting internal constructor(
         if (closed) return
         closed = true
         pdfBox.close()
+        synchronized(textLayers) { textLayers.clear() }
         synchronized(textLock) {
             runCatching { textEngine?.close() }
             textEngine = null
@@ -132,7 +179,12 @@ internal class PdfDocumentSession @VisibleForTesting internal constructor(
         runCatching { unlockedFile?.delete() }
     }
 
+    /** A cached result for one page; [text] is null when the page keeps PDFium's text. */
+    private class TextLayer(val text: AssembledPageText?)
+
     companion object {
+        private const val TEXT_LAYER_PAGES = 16
+
         fun open(context: Context, uri: Uri, password: String?): PdfDocumentSession {
             runCatching { PdfBoxDocument.deleteStaleFiles(context.cacheDir) }
             val resolver = context.contentResolver
