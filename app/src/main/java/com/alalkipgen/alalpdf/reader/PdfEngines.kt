@@ -1,9 +1,11 @@
 package com.alalkipgen.alalpdf.reader
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import android.util.SizeF
 import androidx.annotation.VisibleForTesting
 import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException
@@ -62,6 +64,19 @@ internal class PdfDocumentSession @VisibleForTesting internal constructor(
 
     /** Shared PDFBox document for links, stored metadata and Myanmar text; loaded on first use. */
     val pdfBox: PdfBoxDocument = PdfBoxDocument.forSession(context, uri, password, unlockedFile)
+
+    /**
+     * Glyph text for the Myanmar text of [pdfBox]: fonts with a broken
+     * ToUnicode (Word) are read by their glyphs. Debug builds log what it finds.
+     */
+    private val glyphText = MyanmarGlyphText(
+        table = { MyanmarGlyphMap.bundled(context.assets) },
+        log = if ((context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            { message -> Log.d(LOG_TAG, message) }
+        } else {
+            null
+        },
+    )
 
     /** Recent Myanmar text layers by page, including pages that have none. Guarded by itself. */
     private val textLayers = object : LinkedHashMap<Int, TextLayer>(TEXT_LAYER_PAGES, 0.75f, true) {
@@ -126,7 +141,7 @@ internal class PdfDocumentSession @VisibleForTesting internal constructor(
             pdfBox.read { document ->
                 // Another caller may have read this page while this one waited for the lock.
                 cachedTextLayer(page) ?: TextLayer(
-                    PdfBoxTextSource.extract(document, page, isActive = { coroutine.isActive })
+                    PdfBoxTextSource.extract(document, page, glyphText, isActive = { coroutine.isActive })
                         .takeIf { it.text.isNotBlank() },
                 )
             }
@@ -143,11 +158,12 @@ internal class PdfDocumentSession @VisibleForTesting internal constructor(
     private fun cachedTextLayer(page: Int): TextLayer? = synchronized(textLayers) { textLayers[page] }
 
     /**
-     * Release the parsed PDFBox document and the cached text layers under
-     * memory pressure; both are read again on next use.
+     * Release the parsed PDFBox document, its cached fonts and the cached
+     * text layers under memory pressure; all are read again on next use.
      */
     fun trimPdfBox() {
         synchronized(textLayers) { textLayers.clear() }
+        glyphText.clear()
         pdfBox.trim()
     }
 
@@ -170,6 +186,7 @@ internal class PdfDocumentSession @VisibleForTesting internal constructor(
         if (closed) return
         closed = true
         pdfBox.close()
+        glyphText.clear()
         synchronized(textLayers) { textLayers.clear() }
         synchronized(textLock) {
             runCatching { textEngine?.close() }
@@ -184,6 +201,7 @@ internal class PdfDocumentSession @VisibleForTesting internal constructor(
 
     companion object {
         private const val TEXT_LAYER_PAGES = 16
+        private const val LOG_TAG = "MyanmarGlyphText"
 
         fun open(context: Context, uri: Uri, password: String?): PdfDocumentSession {
             runCatching { PdfBoxDocument.deleteStaleFiles(context.cacheDir) }

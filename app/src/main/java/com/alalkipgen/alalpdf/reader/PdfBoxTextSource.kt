@@ -16,8 +16,9 @@ import java.util.concurrent.CancellationException
  * glyph-box overlap, drops real spaces and partly duplicates /ActualText
  * spans, so its text for Burmese pages is broken. This source reads the
  * glyphs in the order the producer wrote them, replaces every /ActualText
- * span by its text, and leaves line, cluster and space decisions to
- * [MyanmarTextAssembler].
+ * span by its text, reads fonts with a broken ToUnicode CMap (Microsoft
+ * Word) by their glyphs ([MyanmarGlyphText]), and leaves line, cluster and
+ * space decisions to [MyanmarTextAssembler].
  */
 internal object PdfBoxTextSource {
     /** A page that needs longer than this is left to PDFium. */
@@ -26,21 +27,26 @@ internal object PdfBoxTextSource {
     /**
      * Text and selection runs for one page of [document].
      *
+     * [glyphs] gives the text of each glyph outside /ActualText; share one
+     * per document so its font cache serves every page.
+     *
      * Throws [PageTextTimeoutException] when the page runs past [timeoutMs]
      * and [CancellationException] as soon as [isActive] returns false.
      */
     fun extract(
         document: PDDocument,
         page: Int,
+        glyphs: MyanmarGlyphText = MyanmarGlyphText(),
         timeoutMs: Long = PAGE_TIMEOUT_MS,
         isActive: () -> Boolean = { true },
     ): AssembledPageText {
         val pdPage = document.getPage(page)
         val crop = pdPage.cropBox
-        val collector = GlyphCollector(System.nanoTime() + timeoutMs * NANOS_PER_MILLI, isActive)
+        val collector = GlyphCollector(glyphs, System.nanoTime() + timeoutMs * NANOS_PER_MILLI, isActive)
         collector.processPage(pdPage)
         // Rethrow a stop that PDFBox might have swallowed on the way out.
         collector.stop?.let { throw it }
+        glyphs.report(page)
         return MyanmarTextAssembler.assemble(
             page = page,
             items = collector.items,
@@ -57,9 +63,11 @@ internal class PageTextTimeoutException : RuntimeException("Page text took too l
 /**
  * Collects one [GlyphItem] per glyph. The marked-content stack is tracked so
  * every glyph inside an /ActualText span (the outermost one, when nested)
- * carries that span's text and id; the glyph's own Unicode is ignored there.
+ * carries that span's text and id; the glyph's own text, from [glyphs], is
+ * ignored there.
  */
 private class GlyphCollector(
+    private val glyphs: MyanmarGlyphText,
     private val deadlineNanos: Long,
     private val isActive: () -> Boolean,
 ) : PDFMarkedContentExtractor() {
@@ -96,7 +104,7 @@ private class GlyphCollector(
 
     override fun processTextPosition(text: TextPosition) {
         val span = frames.firstOrNull { it.actualText != null }
-        val value = span?.actualText ?: text.unicode ?: return
+        val value = span?.actualText ?: glyphText(text) ?: return
         val left = text.xDirAdj
         val baseline = text.yDirAdj
         items += GlyphItem(
@@ -110,6 +118,12 @@ private class GlyphCollector(
             spanId = span?.id,
             direction = text.dir.toInt(),
         )
+    }
+
+    /** The glyph's ToUnicode text, or its text from the font when the ToUnicode is broken. */
+    private fun glyphText(text: TextPosition): String? {
+        val code = text.characterCodes?.firstOrNull() ?: return text.unicode
+        return glyphs.text(text.font, code, text.unicode)
     }
 
     /** Rendered font size in points: the text rendering matrix, which includes the CTM. */
