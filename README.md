@@ -44,7 +44,7 @@ Whiteout only hides text visually; the original text stays in the file and can s
 - Corrupted or password-protected PDFs may fail because Android `PdfRenderer` has no password-entry API.
 - Large pages can use substantial memory; device memory affects rendering speed.
 - Cloud sync, annotations, and OCR are not included.
-- Myanmar text: copy and search are correct for Unicode PDFs with ToUnicode/ActualText (tested with Google Docs, Chrome and LibreOffice exports). Not supported yet: scanned PDFs (OCR planned) and legacy Zawgyi/non-Unicode font PDFs.
+- Myanmar text: copy and search are correct for Unicode PDFs with ToUnicode/ActualText (tested with Google Docs, Chrome and LibreOffice exports) and for Microsoft Word PDFs in Noto Sans Myanmar, whose ToUnicode is broken: their text comes from the embedded font and a bundled glyph map. Word PDFs in other fonts (Myanmar Text, Pyidaungsu, Padauk) fall back to the font's cmap and the ToUnicode, about 5 % wrong characters, until those fonts are added to `tools/myanmar-glyph-map/fonts.txt`. Not supported yet: scanned PDFs (OCR planned) and legacy Zawgyi/non-Unicode font PDFs.
 - Instrumented tests require an Android device or emulator.
 
 ## Third-party dependencies and licenses
