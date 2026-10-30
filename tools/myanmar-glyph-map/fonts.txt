@@ -1,0 +1,18 @@
+# sha256  url   (fonts used to build glyph_map_v1.tsv; all SIL OFL 1.1)
+b81d9f339764c3273852f597cf77b32a8da0da6f0d823f80a6ce14dec675c680  https://github.com/notofonts/noto-fonts/raw/ad153f5a14/hinted/NotoSansMyanmar-Regular.ttf
+cdc9eceab60dc1ceb9031218b784921dd977cc217948b9abe737d40c6eb31f9b  https://github.com/notofonts/noto-fonts/raw/ad153f5a14/hinted/NotoSansMyanmar-Bold.ttf
+1282396c125d0c20ee6a340b5d6a37a9c8909ce9267e6475265d905d58374cd0  https://github.com/notofonts/noto-fonts/raw/ad153f5a14/hinted/NotoSansMyanmarUI-Regular.ttf
+579072a5be532d71ff9c0a8d6f7d60630aa008525332d41e7c6d28fd1e7a428f  https://github.com/notofonts/noto-fonts/raw/420acaa025/hinted/NotoSansMyanmar-Regular.ttf
+86315e32d6310347b97ef614d9318050c108365f34dd103fedf5bccd9c3fef16  https://github.com/notofonts/noto-fonts/raw/420acaa025/hinted/NotoSansMyanmar-Bold.ttf
+2c8f4cbb8ca4e7ce4a065a861f8c23eb0d4f0543ee8ae2bbe694ce5970796efc  https://github.com/notofonts/noto-fonts/raw/420acaa025/hinted/NotoSansMyanmarUI-Regular.ttf
+6b774c689bce33564520deceeba4e1c07182a335643060714894da6205de653a  https://github.com/notofonts/noto-fonts/raw/b8f5596d3e/hinted/NotoSansMyanmar-Regular.ttf
+9643d8d81390614ca23f72e5ebd64d935adc8faf939a2a1fb7341d6b3a60495d  https://github.com/notofonts/noto-fonts/raw/b8f5596d3e/hinted/NotoSansMyanmar-Bold.ttf
+32a6e43fa38b43a3a32abf6288276097a55d8f1980214674e2beeee80b4ae25f  https://github.com/notofonts/noto-fonts/raw/b8f5596d3e/hinted/NotoSansMyanmarUI-Regular.ttf
+3fe9a4babc12081adc979e0313433e6ec85bb3ad069681c23ee8d8ea8b91332b  https://github.com/notofonts/noto-fonts/raw/ed3f3a6b88/hinted/ttf/NotoSansMyanmar/NotoSansMyanmar-Regular.ttf
+e37e2ef189431020b1eaf4fb8d43252666dc24265d628145fff119613afea174  https://github.com/notofonts/noto-fonts/raw/ed3f3a6b88/hinted/ttf/NotoSansMyanmar/NotoSansMyanmar-Bold.ttf
+6ecb8a2d67e24ee591602d7e802f27e1d8ea6c0fc73c3a08bf3df83b8e99e73b  https://github.com/notofonts/noto-fonts/raw/ed3f3a6b88/hinted/ttf/NotoSansMyanmarUI/NotoSansMyanmarUI-Regular.ttf
+9dd2bc76a822a974efce803a4b07302d14d01d5c1fa9e33a258d15a9cb513a7d  https://github.com/notofonts/noto-fonts/raw/690ec0701e/hinted/ttf/NotoSansMyanmar/NotoSansMyanmar-Regular.ttf
+0f20a5e23dfa2efd0fd98b384d8c1c6ab379810985b79e0ae4369936dec6897b  https://github.com/notofonts/noto-fonts/raw/690ec0701e/hinted/ttf/NotoSansMyanmar/NotoSansMyanmar-Bold.ttf
+d3fa6e33ca7a4aeb8cb65dfe19ec608c49ef629f2b37585c23d5c80b0bd1e1bf  https://github.com/notofonts/noto-fonts/raw/690ec0701e/hinted/ttf/NotoSansMyanmarUI/NotoSansMyanmarUI-Regular.ttf
+fafce4db400bc0b214907ccdbfb0ad2f18a57bfefd08c8a571830b84088cf2fc  https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMyanmar/hinted/ttf/NotoSansMyanmar-Regular.ttf
+99a8c6768416747653232ded39292e789ca579f4272adfb2886f6aa219d20302  https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMyanmar/hinted/ttf/NotoSansMyanmar-Bold.ttf
