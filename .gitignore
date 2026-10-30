@@ -10,3 +10,6 @@ captures/
 *.jks
 *.keystore
 .kotlin/
+
+# Third-party test PDFs that stay on this machine (see MyanmarLocalFixtureTest)
+local-fixtures/
