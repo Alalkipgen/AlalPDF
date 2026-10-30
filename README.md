@@ -37,6 +37,8 @@ Room schema version 1 stores recent documents, progress, and bookmarks. Legacy p
 
 Documents are opened from user-selected URIs. PDF files, reading history, and bookmarks remain on the device; the app does not upload them and has no network requirement. Android backup is enabled in the manifest, so users requiring device-local-only storage should disable app backup in system settings.
 
+Whiteout only hides text visually; the original text stays in the file and can still be copied or extracted.
+
 ## Known limitations
 
 - Corrupted or password-protected PDFs may fail because Android `PdfRenderer` has no password-entry API.

@@ -328,6 +328,12 @@ fun PdfToolsScreen(uri: Uri, back: () -> Unit, saved: (Uri) -> Unit) {
                     Text(" Hide the content underneath")
                 }
                 if (note.whiteout) {
+                    Text(
+                        "Whiteout only hides text visually; the original text stays in the file " +
+                            "and can still be copied or extracted.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Text("Cover height " + (note.whiteoutHeightFraction * 100).toInt() + "%")
                     Slider(
                         note.whiteoutHeightFraction,
