@@ -1,11 +1,11 @@
 package com.alalkipgen.alalpdf.reader
 
-import android.content.ContentResolver
 import android.net.Uri
-import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.interactive.action.PDActionURI
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlin.math.roundToInt
 
 /** Clickable web annotation bounds normalized to the rendered page. */
@@ -13,7 +13,7 @@ data class PdfPageLink(val left: Float, val top: Float, val right: Float, val bo
 
 /**
  * Compatibility path for external PDFs and PDF Reader documents made before link metadata
- * was introduced. The PDFBox document exists only for this call.
+ * was introduced. Links are read from the session's shared [PdfBoxDocument].
  *
  * [extractDocument] is the entry point the reader uses. The previous per-page
  * variant re-parsed the whole file for every page the user scrolled past, so a
@@ -22,41 +22,31 @@ data class PdfPageLink(val left: Float, val top: Float, val right: Float, val bo
  * gives identical results for a fraction of the heap and CPU.
  */
 internal object PdfLinkExtractor {
-    /** Links for every page, extracted with a single document load. */
-    fun extractDocument(
-        resolver: ContentResolver,
-        uri: Uri,
-        password: String? = null,
-    ): Map<Int, List<PdfPageLink>> {
+    /**
+     * Links for every page of the shared document.
+     *
+     * The document lock is taken per page, so other PDFBox work for the
+     * session can run between pages, and cancellation is checked between pages.
+     */
+    suspend fun extractDocument(pdf: PdfBoxDocument): Map<Int, List<PdfPageLink>> {
+        val coroutine = currentCoroutineContext()
+        val pages = pdf.read { document -> minOf(document.numberOfPages, MAX_INDEXED_PAGES) }
         val result = HashMap<Int, List<PdfPageLink>>()
-        resolver.openInputStream(uri)?.use { input ->
-            PDDocument.load(input, password.orEmpty()).use { document ->
-                val pages = minOf(document.numberOfPages, MAX_INDEXED_PAGES)
-                for (index in 0 until pages) {
-                    val links = runCatching { extractFrom(document.getPage(index)) }
-                        .getOrDefault(emptyList())
-                    if (links.isNotEmpty()) result[index] = links
-                }
+        for (index in 0 until pages) {
+            coroutine.ensureActive()
+            val links = pdf.read { document ->
+                runCatching { extractFrom(document.getPage(index)) }.getOrDefault(emptyList())
             }
+            if (links.isNotEmpty()) result[index] = links
         }
         return result
     }
 
-    fun extractPage(
-        resolver: ContentResolver,
-        uri: Uri,
-        pageIndex: Int,
-        password: String? = null,
-    ): List<PdfPageLink> {
+    fun extractPage(pdf: PdfBoxDocument, pageIndex: Int): List<PdfPageLink> {
         if (pageIndex < 0) return emptyList()
-        var result: List<PdfPageLink> = emptyList()
-        resolver.openInputStream(uri)?.use { input ->
-            PDDocument.load(input, password.orEmpty()).use { document ->
-                if (pageIndex >= document.numberOfPages) return@use
-                result = extractFrom(document.getPage(pageIndex))
-            }
+        return pdf.read { document ->
+            if (pageIndex >= document.numberOfPages) emptyList() else extractFrom(document.getPage(pageIndex))
         }
-        return result
     }
 
     private fun extractFrom(page: PDPage): List<PdfPageLink> {

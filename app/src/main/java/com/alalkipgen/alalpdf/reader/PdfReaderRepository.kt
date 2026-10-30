@@ -3,6 +3,7 @@ package com.alalkipgen.alalpdf.reader
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 
 /**
@@ -15,8 +16,6 @@ import kotlinx.coroutines.withContext
  * starved the rest of the app.
  */
 class PdfReaderRepository(private val context: Context) {
-    private val resolver = context.contentResolver
-
     private val sessionLock = Any()
     private var session: PdfDocumentSession? = null
 
@@ -57,7 +56,8 @@ class PdfReaderRepository(private val context: Context) {
      * PDFBox stays the accurate source. It is now read once per document
      * instead of once per page: the old code ran a whole `PDDocument.load()`
      * for every page the user scrolled past, which is the single most
-     * expensive thing that used to happen on the scroll path.
+     * expensive thing that used to happen on the scroll path. The pass uses
+     * the session's shared [PdfBoxDocument], like the stored metadata.
      */
     suspend fun pageLinks(uri: Uri, page: Int): List<PdfPageLink> =
         withContext(PdfWorkDispatchers.metadata) {
@@ -100,23 +100,36 @@ class PdfReaderRepository(private val context: Context) {
     /** Plain text stored by PDF Reader itself, which is always exact. */
     private fun storedPageText(uri: Uri, page: Int): String? = storedContent(uri).pageTexts[page]
 
+    /**
+     * Stored metadata, read once per document from the session's shared PDFBox
+     * document. A result read while that session was closing is not cached, so
+     * reopening the same document reads it again.
+     */
     private fun storedContent(uri: Uri): AlalPdfStoredContent = synchronized(metadataLock) {
-        if (metadataUri != uri) {
-            metadata = AlalPdfText.readContent(context, uri)
+        if (metadataUri == uri) return metadata
+        val pdf = runCatching { readerSession(uri).pdfBox }.getOrNull()
+        val content = pdf?.let(AlalPdfText::readContent) ?: AlalPdfStoredContent()
+        if (pdf == null || !pdf.isClosed) {
+            metadata = content
             metadataUri = uri
         }
-        metadata
+        content
     }
 
-    private fun documentLinks(uri: Uri): Map<Int, List<PdfPageLink>> {
+    private suspend fun documentLinks(uri: Uri): Map<Int, List<PdfPageLink>> {
         synchronized(linkLock) {
             if (linkUri == uri) return linkIndex.orEmpty()
         }
-        val password = synchronized(sessionLock) {
-            session?.takeIf { it.uri == uri }?.password
+        val pdf = runCatching { readerSession(uri).pdfBox }.getOrNull()
+        val extracted = try {
+            pdf?.let { PdfLinkExtractor.extractDocument(it) }.orEmpty()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            emptyMap()
         }
-        val extracted = runCatching { PdfLinkExtractor.extractDocument(resolver, uri, password) }
-            .getOrDefault(emptyMap())
+        // A session closed mid-pass yields a partial index; keep it out of the cache.
+        if (pdf?.isClosed == true) return extracted
         synchronized(linkLock) {
             linkUri = uri
             linkIndex = extracted
@@ -155,7 +168,10 @@ class PdfReaderRepository(private val context: Context) {
     }
 
     fun trimMemory() {
-        synchronized(sessionLock) { session?.trimTextEngine() }
+        synchronized(sessionLock) {
+            session?.trimTextEngine()
+            session?.trimPdfBox()
+        }
         thumbnails?.clearMemory()
     }
 
