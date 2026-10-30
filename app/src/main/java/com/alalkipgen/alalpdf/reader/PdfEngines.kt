@@ -5,8 +5,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.SizeF
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
-import com.tom_roush.pdfbox.pdmodel.PDDocument
+import androidx.annotation.VisibleForTesting
 import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException
 import java.io.Closeable
 import java.io.File
@@ -41,10 +40,11 @@ internal interface PdfTextEngine : Closeable {
 /**
  * The only long-lived owner of read engines for one URI.
  *
- * PDFBox is used here only to unlock an encrypted document into a temporary
- * file. It is closed before either read engine opens that file.
+ * PDFBox unlocks an encrypted document into a temporary file before either
+ * read engine opens that file. Links and stored metadata are read through
+ * [pdfBox], the one PDFBox document of this session, which closes with it.
  */
-internal class PdfDocumentSession private constructor(
+internal class PdfDocumentSession @VisibleForTesting internal constructor(
     private val context: Context,
     val uri: Uri,
     val password: String?,
@@ -55,6 +55,9 @@ internal class PdfDocumentSession private constructor(
     private val textLock = Any()
     private var textEngine: PdfTextEngine? = null
     @Volatile private var closed = false
+
+    /** Shared PDFBox document for links and stored metadata; loaded on first use. */
+    val pdfBox: PdfBoxDocument = PdfBoxDocument.forSession(context, uri, password, unlockedFile)
 
     val pageCount: Int
         get() = synchronized(renderLock) {
@@ -99,6 +102,9 @@ internal class PdfDocumentSession private constructor(
         textEngine = null
     }
 
+    /** Release the parsed PDFBox document under memory pressure; it reloads on next use. */
+    fun trimPdfBox() = pdfBox.trim()
+
     private fun openTextEngine(): PdfTextEngine? {
         textEngine?.let { return it }
         val opened = if (unlockedFile != null) {
@@ -117,6 +123,7 @@ internal class PdfDocumentSession private constructor(
     override fun close() {
         if (closed) return
         closed = true
+        pdfBox.close()
         synchronized(textLock) {
             runCatching { textEngine?.close() }
             textEngine = null
@@ -127,6 +134,7 @@ internal class PdfDocumentSession private constructor(
 
     companion object {
         fun open(context: Context, uri: Uri, password: String?): PdfDocumentSession {
+            runCatching { PdfBoxDocument.deleteStaleFiles(context.cacheDir) }
             val resolver = context.contentResolver
             if (password.isNullOrEmpty()) {
                 val direct = runCatching {
@@ -139,15 +147,9 @@ internal class PdfDocumentSession private constructor(
                 }
             }
 
-            PDFBoxResourceLoader.init(context)
             val unlocked = File(context.cacheDir, "unlock-${System.nanoTime()}.pdf")
             try {
-                resolver.openInputStream(uri)?.use { input ->
-                    PDDocument.load(input, password.orEmpty()).use { document ->
-                        document.isAllSecurityToBeRemoved = true
-                        document.save(unlocked)
-                    }
-                } ?: error("Unable to read PDF")
+                PdfBoxDocument.writeUnlockedCopy(context, uri, password, unlocked)
                 val descriptor = ParcelFileDescriptor.open(
                     unlocked,
                     ParcelFileDescriptor.MODE_READ_ONLY,
