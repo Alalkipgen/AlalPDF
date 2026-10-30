@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.alalkipgen.alalpdf.reader.MyanmarFixtures.CHROME
 import com.alalkipgen.alalpdf.reader.MyanmarFixtures.LIBREOFFICE
+import com.alalkipgen.alalpdf.reader.MyanmarFixtures.VISUAL
+import com.alalkipgen.alalpdf.reader.MyanmarFixtures.WORD_2001
+import com.alalkipgen.alalpdf.reader.MyanmarFixtures.WORD_2107
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import java.io.File
 import java.util.concurrent.CancellationException
@@ -19,8 +22,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Burmese PDFs exported by Chrome and LibreOffice. PDFium returned 32 % and
- * 4 % wrong characters for these pages; the PDFBox text must be exact.
+ * Burmese PDFs exported by Chrome and LibreOffice, and Word-style PDFs (see
+ * the README next to them). PDFium returned 32 % and 4 % wrong characters
+ * for the Chrome and LibreOffice pages, and PDFBox with the Word ToUnicode
+ * about 18 %; the text must be exact.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -28,16 +33,28 @@ class MyanmarFixtureTest {
     @get:Rule
     val temp = TemporaryFolder()
 
+    private lateinit var context: Context
+
     @Before
     fun setUp() {
-        PdfBoxDocument.initResources(ApplicationProvider.getApplicationContext<Context>())
+        context = ApplicationProvider.getApplicationContext()
+        PdfBoxDocument.initResources(context)
     }
 
     @Test
-    fun chromeExportIsExact() = assertExact(CHROME)
+    fun chromeExportIsExact() = assertExact(CHROME, "မင်္ဂလာပါ", "ကျွန်တော်တို့")
 
     @Test
-    fun libreOfficeExportIsExact() = assertExact(LIBREOFFICE)
+    fun libreOfficeExportIsExact() = assertExact(LIBREOFFICE, "မင်္ဂလာပါ", "ကျွန်တော်တို့")
+
+    @Test
+    fun wordExportWithBrokenToUnicodeIsExact() = assertExact(WORD_2001, "ကျွန်ုပ်တို့", "သင်္ချာ")
+
+    @Test
+    fun wordExportWithNewerNotoIsExact() = assertExact(WORD_2107, "ကျွန်ုပ်တို့", "သင်္ချာ")
+
+    @Test
+    fun visualOrderWithoutActualTextIsExact() = assertExact(VISUAL, "ကျွန်ုပ်တို့", "သင်္ချာ")
 
     @Test
     fun rotatedPagesKeepTheTextAndTurnTheBoxes() {
@@ -78,11 +95,14 @@ class MyanmarFixtureTest {
         }
     }
 
-    private fun assertExact(name: String) {
-        val layer = extract(MyanmarFixtures.pdf(name, temp.root))
+    private fun assertExact(name: String, vararg words: String) {
+        val glyphs = MyanmarFixtures.glyphText(context)
+        val layer = extract(MyanmarFixtures.pdf(name, temp.root), glyphs)
         assertEquals(MyanmarFixtures.expectedLines(name), layer.text.lines())
-        assertEquals(1, PdfTextSearch.matches(0, layer.text, "မင်္ဂလာပါ").size)
-        assertEquals(1, PdfTextSearch.matches(0, layer.text, "ကျွန်တော်တို့").size)
+        // No font is taken for Zawgyi and no run for logical order.
+        assertEquals(0, glyphs.counts().zawgyiFonts)
+        assertEquals(0, glyphs.counts().logicalRuns)
+        words.forEach { word -> assertEquals(word, 1, PdfTextSearch.matches(0, layer.text, word).size) }
         // Select all joins every run, so it copies exactly the page text.
         assertEquals(layer.text, layer.runs.joinToString("") { it.text }.trim())
         layer.runs.forEach { run ->
@@ -92,8 +112,10 @@ class MyanmarFixtureTest {
         }
     }
 
-    private fun extract(file: File): AssembledPageText =
-        PDDocument.load(file).use { document -> PdfBoxTextSource.extract(document, 0) }
+    private fun extract(file: File, glyphs: MyanmarGlyphText = MyanmarFixtures.glyphText(context)): AssembledPageText =
+        PDDocument.load(file).use { document ->
+            PdfBoxTextSource.extract(document, 0, glyphs)
+        }
 
     /** The run box on the rendered page after a clockwise /Rotate. */
     private fun turn(run: PdfTextRun, rotation: Int): PdfTextRunBox = when (rotation) {

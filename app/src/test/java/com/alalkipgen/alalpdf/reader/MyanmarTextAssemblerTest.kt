@@ -62,14 +62,93 @@ class MyanmarTextAssemblerTest {
 
     @Test
     fun markAfterASpaceIsKept() {
-        // Without /ActualText the glyphs keep the order they were drawn in.
+        // A mark with no base before it stays where it was drawn.
         val text = assemble(
             glyph("မ", 0f, 6f),
             glyph(" ", 6f, 3f),
-            glyph("ေ", 9f, 3f),
+            glyph("ိ", 9f, 3f),
             glyph("က", 12f, 6f),
         )
-        assertEquals("မ ေက", text)
+        assertEquals("မ ိက", text)
+    }
+
+    @Test
+    fun glyphsInVisualOrderAreReadInLogicalOrder() {
+        // Without /ActualText, as Word writes it: ေ is drawn before its consonant, kinzi after it.
+        val layer = MyanmarTextAssembler.assemble(
+            0,
+            listOf(
+                glyph("ေ", 0f, 4f),
+                glyph("က", 4f, 6f),
+                glyph("ာ", 10f, 4f),
+                glyph(" ", 14f, 3f),
+                glyph("သ", 17f, 6f),
+                glyph("ခ", 23f, 6f),
+                glyph("င်္", 24f, 0f),
+                glyph("ျ", 29f, 2f),
+                glyph("ာ", 31f, 4f),
+            ),
+            frame,
+            MyanmarText::normalize,
+        )
+        assertEquals("ကော သင်္ချာ", layer.text)
+        assertEquals(listOf("ကော", " ", "သ", "င်္ချာ"), layer.runs.map { it.text })
+        // A syllable selects as one run over all of its glyphs.
+        val syllable = layer.runs.first()
+        assertEquals(0f, syllable.left, EPSILON)
+        assertEquals(14f / WIDTH, syllable.right, EPSILON)
+    }
+
+    @Test
+    fun zawgyiGlyphsKeepTheirOrder() {
+        // Zawgyi text is stored in visual order, ေ before its consonant; it is copied as Zawgyi.
+        val zawgyi = GlyphFont("Zawgyi-One", zawgyi = true)
+        val text = assemble(
+            glyph("ေ", 0f, 4f, font = zawgyi),
+            glyph("က", 4f, 6f, font = zawgyi),
+            glyph("်", 9f, 0f, font = zawgyi),
+            glyph("ာ", 10f, 4f, font = zawgyi),
+            glyph("င", 14f, 6f, font = zawgyi),
+            glyph("္", 19f, 0f, font = zawgyi),
+            glyph("း", 20f, 3f, font = zawgyi),
+        )
+        assertEquals("ေက်ာင္း", text)
+    }
+
+    @Test
+    fun runsInLogicalOrderKeepTheirOrder() {
+        // Unshaped text: ေ follows its consonant and a mark follows ေ.
+        val kept = ArrayList<String>()
+        fun read(glyphs: List<String>, font: GlyphFont? = null): String = MyanmarTextAssembler.assemble(
+            0,
+            glyphs.mapIndexed { index, text -> glyph(text, index * 5f, 5f, font = font) },
+            frame,
+            MyanmarText::normalize,
+            keptInLogicalOrder = { kept += it },
+        ).text
+        val healthy = GlyphFont("Pyidaungsu")
+        assertEquals("ကော", read(listOf("က", "ေ", "ာ"), healthy))
+        assertEquals("နေကောင်း", read(listOf("န", "ေ", "က", "ေ", "ာ", "င", "်", "း")))
+        assertEquals(listOf("ကော", "နေကောင်း"), kept)
+        // A broken ToUnicode (Word) is always shaped, so the same glyphs are read in visual order:
+        // each ေ goes after the consonant that follows it.
+        val word = GlyphFont("Word", brokenToUnicode = true)
+        assertEquals("နကေောင်း", read(listOf("န", "ေ", "က", "ေ", "ာ", "င", "်", "း"), word))
+        assertEquals(2, kept.size)
+    }
+
+    @Test
+    fun actualTextSpansAreNotPartOfASyllable() {
+        // ActualText is logical already and stays as it is: the ေ before it is not moved into it.
+        val text = assemble(
+            glyph("ေ", 0f, 4f),
+            glyph("ကျ", 4f, 6f, span = 1),
+            glyph("ကျ", 6f, 3f, span = 1),
+            glyph(" ", 13f, 3f),
+            glyph("ေ", 16f, 4f),
+            glyph("ခ", 20f, 6f),
+        )
+        assertEquals("ေကျ ခေ", text)
     }
 
     @Test
@@ -162,7 +241,8 @@ class MyanmarTextAssemblerTest {
         baseline: Float = 100f,
         span: Int? = null,
         top: Float = baseline - 7f,
-    ) = GlyphItem(text, left, left + width, top, baseline, baseline, FONT_SIZE, span)
+        font: GlyphFont? = null,
+    ) = GlyphItem(text, left, left + width, top, baseline, baseline, FONT_SIZE, span, font = font)
 
     private fun assertBox(expected: PdfTextRunBox, actual: PdfTextRunBox) {
         assertEquals(expected.left, actual.left, EPSILON)
