@@ -62,14 +62,14 @@ class MyanmarTextAssemblerTest {
 
     @Test
     fun markAfterASpaceIsKept() {
-        // Without /ActualText the glyphs keep the order they were drawn in.
+        // A mark with no base before it stays where it was drawn.
         val text = assemble(
             glyph("မ", 0f, 6f),
             glyph(" ", 6f, 3f),
-            glyph("ေ", 9f, 3f),
+            glyph("ိ", 9f, 3f),
             glyph("က", 12f, 6f),
         )
-        assertEquals("မ ေက", text)
+        assertEquals("မ ိက", text)
     }
 
     @Test

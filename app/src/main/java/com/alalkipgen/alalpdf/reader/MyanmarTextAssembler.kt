@@ -93,22 +93,29 @@ internal data class AssembledPageText(val text: String, val runs: List<PdfTextRu
  * Myanmar needs this because the visual order of glyphs is not the logical
  * order of the text: zero-width marks can sit right of the next consonant,
  * and shaping engines reorder or merge glyphs, which is what /ActualText
- * spans repair. One rule set is used for every PDF:
+ * spans repair; where a producer writes no /ActualText (Microsoft Word),
+ * rule 3 restores the logical order. One rule set is used for every PDF:
  *
  * 1. All items of one /ActualText span become one cluster whose text is the
  *    ActualText, emitted once; its box is the union of the glyph boxes.
  * 2. A new line starts only when the baseline moves by more than
  *    [LINE_BREAK] x font size (or the text direction changes). Glyph-box
  *    overlap is never used.
- * 3. Inside a line a cluster is an ActualText span or a base item plus the
- *    combining marks (Mn/Mc) that follow it. Clusters are stable-sorted by
- *    left x; marks are never sorted or split on their own.
- * 4. Real space glyphs are kept, repeats collapsed. One space is added
+ * 3. Inside a line, each run of glyphs outside /ActualText whose text
+ *    starts with a Myanmar character (U+1000..U+109F) is in visual order. It
+ *    is cut into syllables, each written in logical order
+ *    ([MyanmarReorder]), and every syllable becomes one item whose box is
+ *    the union of its glyph boxes, like an ActualText span. ActualText
+ *    spans are never part of a syllable.
+ * 4. A cluster is an ActualText span, a syllable or another base item plus
+ *    the combining marks (Mn/Mc) that follow it. Clusters are stable-sorted
+ *    by left x; marks are never sorted or split on their own.
+ * 5. Real space glyphs are kept, repeats collapsed. One space is added
  *    between clusters whose gap is more than [SPACE_GAP] x font size, never
  *    before a mark. Lines are trimmed. The font size is the rendered size, so
  *    the threshold is a quarter em on every page; a word space is about that
  *    wide, and the widest gap inside a Burmese word in the test PDFs is 0.22 em.
- * 5. A cluster with the same text as the previous one and a box within
+ * 6. A cluster with the same text as the previous one and a box within
  *    [DUPLICATE] x font size of it in x and y is a fake-bold or shadow copy
  *    and is dropped.
  */
@@ -116,6 +123,8 @@ internal object MyanmarTextAssembler {
     const val LINE_BREAK = 0.5f
     const val SPACE_GAP = 0.25f
     const val DUPLICATE = 0.15f
+    private const val MYANMAR_FIRST = '\u1000'
+    private const val MYANMAR_LAST = '\u109F'
 
     fun assemble(
         page: Int,
@@ -124,7 +133,7 @@ internal object MyanmarTextAssembler {
         normalize: (String) -> String = { it },
     ): AssembledPageText {
         val lines = splitLines(mergeSpans(items.mapNotNull(::printable)))
-            .map { line -> buildPieces(dropDuplicates(clusters(line))) }
+            .map { line -> buildPieces(dropDuplicates(clusters(syllables(line)))) }
             .map { pieces -> trim(collapseSpaces(normalizePieces(pieces, normalize))) }
             .filter { it.isNotEmpty() }
         val runs = ArrayList<PdfTextRun>()
@@ -187,7 +196,32 @@ internal object MyanmarTextAssembler {
     }
 
     /**
-     * Rule 3: base plus following marks, then a stable sort by left x. A mark
+     * Rule 3: one atom per syllable of each run of Myanmar glyphs outside
+     * /ActualText, with the syllable's text in logical order.
+     */
+    private fun syllables(line: List<Atom>): List<Atom> {
+        if (line.none { it.isMyanmarGlyph }) return line
+        val atoms = ArrayList<Atom>(line.size)
+        var start = 0
+        while (start < line.size) {
+            if (!line[start].isMyanmarGlyph) {
+                atoms += line[start++]
+                continue
+            }
+            var end = start
+            while (end < line.size && line[end].isMyanmarGlyph) end++
+            val run = line.subList(start, end)
+            MyanmarReorder.syllables(run.map { it.text }).mapTo(atoms) { syllable ->
+                val glyphs = run.subList(syllable.first, syllable.last + 1)
+                if (glyphs.size == 1 && glyphs[0].text == syllable.text) glyphs[0] else Atom.union(syllable.text, glyphs)
+            }
+            start = end
+        }
+        return atoms
+    }
+
+    /**
+     * Rule 4: base plus following marks, then a stable sort by left x. A mark
      * after a space or at the start of a line has no base and starts its own
      * cluster.
      */
@@ -204,7 +238,7 @@ internal object MyanmarTextAssembler {
         return clusters.sortedBy { it.left }
     }
 
-    /** Rule 5: fake-bold and shadow copies drawn on top of the previous cluster. */
+    /** Rule 6: fake-bold and shadow copies drawn on top of the previous cluster. */
     private fun dropDuplicates(clusters: List<Cluster>): List<Cluster> {
         val kept = ArrayList<Cluster>(clusters.size)
         for (cluster in clusters) {
@@ -224,7 +258,7 @@ internal object MyanmarTextAssembler {
         return kept
     }
 
-    /** Rule 4: clusters and spaces of one line, left to right. */
+    /** Rule 5: clusters and spaces of one line, left to right. */
     private fun buildPieces(clusters: List<Cluster>): MutableList<Piece> {
         val pieces = ArrayList<Piece>()
         var previousRight = Float.NaN
@@ -337,18 +371,45 @@ internal object MyanmarTextAssembler {
         return type == Character.NON_SPACING_MARK.toInt() || type == Character.COMBINING_SPACING_MARK.toInt()
     }
 
-    private class Atom(item: GlyphItem) {
-        val text = item.text
-        val spanId = item.spanId
-        val baselineY = item.baselineY
-        val fontSize = item.fontSize
-        val direction = item.direction
-        var left = item.left
-        var right = item.right
-        var top = item.top
-        var bottom = item.bottom
+    private class Atom(
+        val text: String,
+        val spanId: Int?,
+        val baselineY: Float,
+        val fontSize: Float,
+        val direction: Int,
+        var left: Float,
+        var right: Float,
+        var top: Float,
+        var bottom: Float,
+    ) {
+        constructor(item: GlyphItem) : this(
+            item.text, item.spanId, item.baselineY, item.fontSize, item.direction,
+            item.left, item.right, item.top, item.bottom,
+        )
+
         val isBlank = text.isBlank()
         val startsWithMark = startsWithMark(text)
+
+        /** A glyph outside /ActualText whose text starts with a Myanmar character. */
+        val isMyanmarGlyph = spanId == null && text.isNotEmpty() && text[0] in MYANMAR_FIRST..MYANMAR_LAST
+
+        companion object {
+            /** One atom with [text] for [atoms] of one line: the union of their boxes. */
+            fun union(text: String, atoms: List<Atom>): Atom {
+                val first = atoms.first()
+                return Atom(
+                    text = text,
+                    spanId = null,
+                    baselineY = first.baselineY,
+                    fontSize = atoms.maxOf { it.fontSize },
+                    direction = first.direction,
+                    left = atoms.minOf { it.left },
+                    right = atoms.maxOf { it.right },
+                    top = atoms.minOf { it.top },
+                    bottom = atoms.maxOf { it.bottom },
+                )
+            }
+        }
     }
 
     private class Cluster(val head: Atom) {
