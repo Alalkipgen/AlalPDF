@@ -4,7 +4,8 @@
 # Subjoined "U+1039 C" stays right after the base. All other mark chars are emitted in the order
 # required by the OpenType/HarfBuzz Myanmar syllable grammar:
 #   MY ျ < MR ြ < MW ွ < MH ှ < E ေ < above ိ ီ ဲ < below ု ူ < anusvara ံ < dot below ့ < asat ် < visarga း
-# Asat exception: after ါ/ာ if present, else after ့ if present, else BEFORE ု/ူ if present (ကျွန်ုပ်).
+# Asat: right after the base if it is drawn before a medial (ယောက်ျား); else after ါ/ာ; else after ့;
+# else BEFORE ု/ူ (ကျွန်ုပ်); else last before း.
 E='\u1031'; RA='\u103c'; KINZI='\u1004\u103a\u1039'; ASAT='\u103a'
 W={0x103B:3,0x103C:4,0x103D:5,0x103E:6,0x1031:7,0x102D:8,0x102E:8,0x1032:8,0x102F:9,0x1030:9,0x1036:11,0x1037:12,0x103A:13,0x102B:10,0x102C:10,0x1038:16}
 def is_base(c):
@@ -17,7 +18,10 @@ def build_syllable(pre, base, marks, kinzi):
         (sub if m.startswith('\u1039') else rest).append(m)
     chars=[c for m in pre+rest for c in m]
     s=set(chars)
-    if '\u102b' in s or '\u102c' in s: wa=13          # ော် ါ် (asat after aa)
+    post=[c for m in rest for c in m]            # post-base mark chars in visual order
+    first_med=next((i for i,c in enumerate(post) if c in '\u103b\u103c\u103d\u103e'),None)
+    if ASAT in post and first_med is not None and post.index(ASAT)<first_med: wa=2.5   # ယောက်ျား: C + asat + medial
+    elif '\u102b' in s or '\u102c' in s: wa=13          # ော် ါ် (asat after aa)
     elif '\u1037' in s: wa=12.5                        # င့်
     elif '\u102f' in s or '\u1030' in s: wa=8.5         # န်ု
     else: wa=13
