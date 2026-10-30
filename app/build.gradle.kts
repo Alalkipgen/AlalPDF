@@ -22,6 +22,8 @@ android { namespace = "com.alalkipgen.alalpdf"; compileSdk = 35
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures { compose = true }
+    // Robolectric unit tests run PdfBox-Android, which reads its glyph lists from the AAR assets.
+    testOptions { unitTests.isIncludeAndroidResources = true }
     sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
     signingConfigs {
         create("release") {
@@ -69,6 +71,8 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test:core:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:core:1.6.1")
