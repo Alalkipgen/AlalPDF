@@ -33,10 +33,11 @@ class MyanmarRealFixtureTest {
 
         var errors = 0
         var length = 0
+        val glyphs = MyanmarFixtures.glyphText(context)
         PDDocument.load(File(directory, PDF), MemoryUsageSetting.setupTempFileOnly()).use { document ->
             for (page in 0 until document.numberOfPages) {
                 val started = System.nanoTime()
-                val text = PdfBoxTextSource.extract(document, page).text
+                val text = PdfBoxTextSource.extract(document, page, glyphs).text
                 val millis = (System.nanoTime() - started) / 1_000_000
                 val expected = collapse(File(directory, "golden/page${page + 1}.txt").readText())
                 val actual = collapse(text)

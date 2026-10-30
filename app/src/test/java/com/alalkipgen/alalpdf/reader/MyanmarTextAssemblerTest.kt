@@ -73,6 +73,47 @@ class MyanmarTextAssemblerTest {
     }
 
     @Test
+    fun glyphsInVisualOrderAreReadInLogicalOrder() {
+        // Without /ActualText, as Word writes it: ေ is drawn before its consonant, kinzi after it.
+        val layer = MyanmarTextAssembler.assemble(
+            0,
+            listOf(
+                glyph("ေ", 0f, 4f),
+                glyph("က", 4f, 6f),
+                glyph("ာ", 10f, 4f),
+                glyph(" ", 14f, 3f),
+                glyph("သ", 17f, 6f),
+                glyph("ခ", 23f, 6f),
+                glyph("င်္", 24f, 0f),
+                glyph("ျ", 29f, 2f),
+                glyph("ာ", 31f, 4f),
+            ),
+            frame,
+            MyanmarText::normalize,
+        )
+        assertEquals("ကော သင်္ချာ", layer.text)
+        assertEquals(listOf("ကော", " ", "သ", "င်္ချာ"), layer.runs.map { it.text })
+        // A syllable selects as one run over all of its glyphs.
+        val syllable = layer.runs.first()
+        assertEquals(0f, syllable.left, EPSILON)
+        assertEquals(14f / WIDTH, syllable.right, EPSILON)
+    }
+
+    @Test
+    fun actualTextSpansAreNotPartOfASyllable() {
+        // ActualText is logical already and stays as it is: the ေ before it is not moved into it.
+        val text = assemble(
+            glyph("ေ", 0f, 4f),
+            glyph("ကျ", 4f, 6f, span = 1),
+            glyph("ကျ", 6f, 3f, span = 1),
+            glyph(" ", 13f, 3f),
+            glyph("ေ", 16f, 4f),
+            glyph("ခ", 20f, 6f),
+        )
+        assertEquals("ေကျ ခေ", text)
+    }
+
+    @Test
     fun actualTextIsEmittedOnceForTheWholeSpan() {
         // PDFium returned "လုံး" and then "ုံ" again for this span.
         val layer = MyanmarTextAssembler.assemble(
