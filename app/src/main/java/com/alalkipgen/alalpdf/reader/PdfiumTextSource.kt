@@ -122,10 +122,12 @@ internal class PdfiumTextSource private constructor(
             pdfPage.openTextPage().use { textPage ->
                 val count = textPage.textPageCountChars()
                 if (count <= 0) return emptyList()
-                val text = textPage.textPageGetText(0, count).orEmpty()
                 val runs = ArrayList<PdfTextRun>(count)
-                for (i in 0 until minOf(count, text.length)) {
-                    val symbol = text[i]
+                for (i in 0 until count) {
+                    // Read the character by the same index as its box. Indexing the
+                    // page string instead pairs boxes with the wrong characters
+                    // wherever that string and PDFium's character list differ in length.
+                    val symbol = runCatching { textPage.textPageGetUnicode(i) }.getOrNull() ?: continue
                     val box = runCatching { textPage.textPageGetCharBox(i) }.getOrNull()
                     if (box == null) {
                         // Line breaks and other zero-area characters still have
