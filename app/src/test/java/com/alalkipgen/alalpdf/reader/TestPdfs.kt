@@ -2,9 +2,11 @@ package com.alalkipgen.alalpdf.reader
 
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
+import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
 import com.tom_roush.pdfbox.pdmodel.encryption.AccessPermission
 import com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy
+import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 import com.tom_roush.pdfbox.pdmodel.interactive.action.PDActionURI
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink
 import java.io.File
@@ -20,6 +22,8 @@ internal object TestPdfs {
         links: List<Link> = emptyList(),
         metadata: Map<String, String> = emptyMap(),
         userPassword: String? = null,
+        /** Helvetica text drawn on the page with the same index. */
+        texts: List<String> = emptyList(),
     ): File {
         PDDocument().use { document ->
             repeat(pageCount) { index ->
@@ -33,6 +37,15 @@ internal object TestPdfs {
                 }
                 if (annotations.isNotEmpty()) page.annotations = annotations
                 document.addPage(page)
+                texts.getOrNull(index)?.let { text ->
+                    PDPageContentStream(document, page).use { content ->
+                        content.beginText()
+                        content.setFont(PDType1Font.HELVETICA, 12f)
+                        content.newLineAtOffset(10f, 50f)
+                        content.showText(text)
+                        content.endText()
+                    }
+                }
             }
             metadata.forEach { (key, value) -> document.documentInformation.setCustomMetadataValue(key, value) }
             if (userPassword != null) {
