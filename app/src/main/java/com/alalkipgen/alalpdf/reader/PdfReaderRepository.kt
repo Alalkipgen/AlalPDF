@@ -73,14 +73,20 @@ class PdfReaderRepository(private val context: Context) {
 
     /**
      * Positioned character boxes for one page, used to draw and hit-test the
-     * selection overlay. PDFium is the only source that gives a box per
-     * character, which is what character level selection needs.
+     * selection overlay. PDFium gives a box per character, which is what
+     * character level selection needs. On a page with Myanmar text the runs
+     * come from the session's PDFBox text layer instead, one per cluster, so
+     * a selection copies the same text as [pageText].
      */
     suspend fun pageTextRuns(uri: Uri, page: Int): List<PdfTextRun> =
         withContext(PdfWorkDispatchers.text) {
             val charRuns = runCatching { readerSession(uri).characterRuns(page) }
                 .getOrDefault(emptyList())
-            if (charRuns.isNotEmpty()) return@withContext charRuns
+            if (charRuns.isNotEmpty()) {
+                val pdfiumText = charRuns.joinToString("") { it.text }
+                myanmarTextLayer(uri, page, pdfiumText)?.let { return@withContext it.runs }
+                return@withContext charRuns
+            }
             runsOrEmpty(uri, page)
         }
 
@@ -88,7 +94,10 @@ class PdfReaderRepository(private val context: Context) {
         withContext(PdfWorkDispatchers.text) {
             storedPageText(uri, page)?.takeIf { it.isNotBlank() }?.let { return@withContext it }
             val pdfiumText = runCatching { readerSession(uri).pageText(page) }.getOrDefault("")
-            if (pdfiumText.isNotBlank()) return@withContext MyanmarText.normalize(pdfiumText).trim()
+            if (pdfiumText.isNotBlank()) {
+                myanmarTextLayer(uri, page, pdfiumText)?.let { return@withContext it.text }
+                return@withContext MyanmarText.normalize(pdfiumText).trim()
+            }
             val runs = runsOrEmpty(uri, page)
             if (runs.isNotEmpty()) {
                 MyanmarText.normalize(runs.joinToString("\n") { it.text }).trim()
@@ -96,6 +105,10 @@ class PdfReaderRepository(private val context: Context) {
                 ""
             }
         }
+
+    /** PDFBox text for a Myanmar page, or null to keep PDFium's text. */
+    private suspend fun myanmarTextLayer(uri: Uri, page: Int, pdfiumText: String): AssembledPageText? =
+        runCatching { readerSession(uri) }.getOrNull()?.myanmarTextLayer(page, pdfiumText)
 
     /** Plain text stored by PDF Reader itself, which is always exact. */
     private fun storedPageText(uri: Uri, page: Int): String? = storedContent(uri).pageTexts[page]
