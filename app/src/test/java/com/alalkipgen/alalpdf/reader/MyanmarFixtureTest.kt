@@ -96,8 +96,12 @@ class MyanmarFixtureTest {
     }
 
     private fun assertExact(name: String, vararg words: String) {
-        val layer = extract(MyanmarFixtures.pdf(name, temp.root))
+        val glyphs = MyanmarFixtures.glyphText(context)
+        val layer = extract(MyanmarFixtures.pdf(name, temp.root), glyphs)
         assertEquals(MyanmarFixtures.expectedLines(name), layer.text.lines())
+        // No font is taken for Zawgyi and no run for logical order.
+        assertEquals(0, glyphs.counts().zawgyiFonts)
+        assertEquals(0, glyphs.counts().logicalRuns)
         words.forEach { word -> assertEquals(word, 1, PdfTextSearch.matches(0, layer.text, word).size) }
         // Select all joins every run, so it copies exactly the page text.
         assertEquals(layer.text, layer.runs.joinToString("") { it.text }.trim())
@@ -108,9 +112,9 @@ class MyanmarFixtureTest {
         }
     }
 
-    private fun extract(file: File): AssembledPageText =
+    private fun extract(file: File, glyphs: MyanmarGlyphText = MyanmarFixtures.glyphText(context)): AssembledPageText =
         PDDocument.load(file).use { document ->
-            PdfBoxTextSource.extract(document, 0, MyanmarFixtures.glyphText(context))
+            PdfBoxTextSource.extract(document, 0, glyphs)
         }
 
     /** The run box on the rendered page after a clockwise /Rotate. */

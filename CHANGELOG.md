@@ -10,3 +10,5 @@ All notable changes to this project are documented in this file.
   copied, selected and searched correctly for Noto Sans Myanmar: glyph text
   comes from the embedded font's `cmap` and a bundled glyph map, and glyphs
   drawn in visual order are put back into logical order.
+- Zawgyi PDFs and Burmese text that is already in logical order keep the text
+  as extracted instead of being reordered; Zawgyi is copied as Zawgyi.

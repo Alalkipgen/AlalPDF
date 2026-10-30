@@ -5,8 +5,10 @@ import com.tom_roush.pdfbox.cos.COSBase
 import com.tom_roush.pdfbox.cos.COSDictionary
 import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.font.PDFont
 import com.tom_roush.pdfbox.text.PDFMarkedContentExtractor
 import com.tom_roush.pdfbox.text.TextPosition
+import java.util.IdentityHashMap
 import java.util.concurrent.CancellationException
 
 /**
@@ -17,8 +19,8 @@ import java.util.concurrent.CancellationException
  * spans, so its text for Burmese pages is broken. This source reads the
  * glyphs in the order the producer wrote them, replaces every /ActualText
  * span by its text, reads fonts with a broken ToUnicode CMap (Microsoft
- * Word) by their glyphs ([MyanmarGlyphText]), and leaves line, cluster and
- * space decisions to [MyanmarTextAssembler].
+ * Word) by their glyphs and tells Zawgyi fonts ([MyanmarGlyphText]), and
+ * leaves line, cluster and space decisions to [MyanmarTextAssembler].
  */
 internal object PdfBoxTextSource {
     /** A page that needs longer than this is left to PDFium. */
@@ -52,6 +54,7 @@ internal object PdfBoxTextSource {
             items = collector.items,
             frame = PageFrame(crop.width, crop.height, pdPage.rotation),
             normalize = MyanmarText::normalize,
+            keptInLogicalOrder = { run -> glyphs.keptInLogicalOrder(page, run) },
         )
     }
 
@@ -63,8 +66,8 @@ internal class PageTextTimeoutException : RuntimeException("Page text took too l
 /**
  * Collects one [GlyphItem] per glyph. The marked-content stack is tracked so
  * every glyph inside an /ActualText span (the outermost one, when nested)
- * carries that span's text and id; the glyph's own text, from [glyphs], is
- * ignored there.
+ * carries that span's text and id; the glyph's own text and font, from
+ * [glyphs], are ignored there.
  */
 private class GlyphCollector(
     private val glyphs: MyanmarGlyphText,
@@ -77,6 +80,8 @@ private class GlyphCollector(
 
     private val frames = ArrayDeque<Frame>()
     private var nextFrameId = 0
+
+    private val fonts = IdentityHashMap<COSDictionary, GlyphFont>()
 
     override fun beginMarkedContentSequence(tag: COSName?, properties: COSDictionary?) {
         super.beginMarkedContentSequence(tag, properties)
@@ -104,7 +109,8 @@ private class GlyphCollector(
 
     override fun processTextPosition(text: TextPosition) {
         val span = frames.firstOrNull { it.actualText != null }
-        val value = span?.actualText ?: glyphText(text) ?: return
+        val font = if (span == null) text.font?.let(::fontOf) else null
+        val value = span?.actualText ?: glyphText(text, font) ?: return
         val left = text.xDirAdj
         val baseline = text.yDirAdj
         items += GlyphItem(
@@ -117,13 +123,18 @@ private class GlyphCollector(
             fontSize = fontSizeOf(text),
             spanId = span?.id,
             direction = text.dir.toInt(),
+            font = font,
         )
     }
 
+    /** [font] as [glyphs] reads it, the same for the whole page even if [glyphs] is cleared meanwhile. */
+    private fun fontOf(font: PDFont): GlyphFont = fonts.getOrPut(font.cosObject) { glyphs.font(font) }
+
     /** The glyph's ToUnicode text, or its text from the font when the ToUnicode is broken. */
-    private fun glyphText(text: TextPosition): String? {
-        val code = text.characterCodes?.firstOrNull() ?: return text.unicode
-        return glyphs.text(text.font, code, text.unicode)
+    private fun glyphText(text: TextPosition, font: GlyphFont?): String? {
+        val code = text.characterCodes?.firstOrNull()
+        if (font == null || code == null) return text.unicode
+        return glyphs.text(font, code, text.unicode)
     }
 
     /** Rendered font size in points: the text rendering matrix, which includes the CTM. */

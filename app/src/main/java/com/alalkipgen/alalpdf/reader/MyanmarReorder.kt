@@ -36,6 +36,25 @@ internal object MyanmarReorder {
     fun reorder(glyphs: List<String>): String = syllables(glyphs).joinToString("") { it.text }
 
     /**
+     * True when [glyphs], the glyph texts of one run in content order, are
+     * in logical order already: a pre-base glyph is directly followed by a
+     * mark. In visual order a pre-base glyph is followed by its base or by
+     * another pre-base glyph. Empty texts are skipped.
+     */
+    fun isLogicalOrder(glyphs: List<String>): Boolean {
+        var afterPreBase = false
+        for (glyph in glyphs) {
+            if (glyph.isEmpty()) continue
+            val first = glyph.codePointAt(0)
+            val preBase = first == E || first == MEDIAL_RA
+            // Kinzi starts with င, a base, so it is no mark here.
+            if (afterPreBase && first in MYANMAR && !preBase && !isBase(first)) return true
+            afterPreBase = preBase
+        }
+        return false
+    }
+
+    /**
      * [glyphs], the glyph texts of one line in content order, cut into
      * syllables. Each syllable covers consecutive glyphs; an empty text
      * belongs to none.

@@ -8,6 +8,7 @@ import com.alalkipgen.alalpdf.reader.MyanmarFixtures.VISUAL
 import com.alalkipgen.alalpdf.reader.MyanmarFixtures.WORD_2001
 import com.alalkipgen.alalpdf.reader.MyanmarFixtures.WORD_2107
 import com.tom_roush.fontbox.ttf.CmapTable
+import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.font.PDCIDFontType2
 import com.tom_roush.pdfbox.pdmodel.font.PDFont
@@ -60,6 +61,53 @@ class MyanmarGlyphTextTest {
                 val glyphs = MyanmarGlyphText()
                 fonts.forEach { assertFalse("$name ${it.name}", glyphs.isBroken(it)) }
             }
+        }
+    }
+
+    @Test
+    fun zawgyiFontsByNameOrByCodePoint() {
+        for (name in listOf(WORD_2001, WORD_2107, VISUAL, CHROME, LIBREOFFICE)) {
+            open(name) { document ->
+                val glyphs = MyanmarGlyphText()
+                usedGlyphs(document).keys.forEach { assertFalse("$name ${it.name}", glyphs.isZawgyi(it)) }
+            }
+        }
+        // Fixture fonts renamed, by their BaseFont or by their FontName.
+        open(VISUAL) { document ->
+            val fonts = usedGlyphs(document).keys.filterIsInstance<PDType0Font>()
+            fonts.forEach { it.cosObject.setName(COSName.BASE_FONT, "ABCDEF+Zawgyi-One") }
+            val glyphs = MyanmarGlyphText()
+            fonts.forEach { assertTrue(glyphs.isZawgyi(it)) }
+            // Their glyphs keep their order, as drawn: every ေ is right before its consonant or ြ.
+            val text = PdfBoxTextSource.extract(document, 0, glyphs).text
+            val expected = MyanmarFixtures.expectedLines(VISUAL).joinToString("\n")
+            assertEquals(expected.count { it == '\u1031' }, text.count { it == '\u1031' })
+            val misplaced = Regex("\u1031(?![\u1000-\u102A\u103C])").findAll(text).map { it.range.first }.toList()
+            assertEquals(emptyList<Int>(), misplaced)
+            assertEquals(1, glyphs.counts().zawgyiFonts)
+        }
+        open(VISUAL) { document ->
+            val font = usedGlyphs(document).keys.first { it is PDType0Font }
+            font.fontDescriptor.fontName = "Zawgyi One Bold"
+            assertTrue(MyanmarGlyphText().isZawgyi(font))
+        }
+        // A glyph text with a Zawgyi code point.
+        open(CHROME) { document ->
+            val font = usedGlyphs(document).keys.first { it is PDType0Font }
+            val glyphs = MyanmarGlyphText()
+            assertFalse(glyphs.isZawgyi(font))
+            assertEquals("\u1064", glyphs.text(glyphs.font(font), 1, "\u1064"))
+            assertTrue(glyphs.isZawgyi(font))
+        }
+        // A ToUnicode value with a Zawgyi code point, before any glyph is read.
+        open(CHROME) { document ->
+            val font = usedGlyphs(document).keys.first { it is PDType0Font }
+            val toUnicode = document.document.createCOSStream()
+            toUnicode.createOutputStream().use { it.write(toUnicodeCMap("<0001> <1064>").toByteArray()) }
+            font.cosObject.setItem(COSName.TO_UNICODE, toUnicode)
+            val lines = ArrayList<String>()
+            assertTrue(MyanmarGlyphText(log = { lines += it }).isZawgyi(font))
+            assertEquals(listOf("${font.name}: Zawgyi (code point U+1064), kept as drawn"), lines)
         }
     }
 
@@ -138,6 +186,25 @@ class MyanmarGlyphTextTest {
             PdfBoxTextSource.extract(document, 0, glyphs)
             glyphs.counts()
         }
+
+    private fun toUnicodeCMap(bfchar: String): String =
+        """
+        /CIDInit /ProcSet findresource begin
+        12 dict begin
+        begincmap
+        /CMapName /Test def
+        /CMapType 2 def
+        1 begincodespacerange
+        <0000> <FFFF>
+        endcodespacerange
+        1 beginbfchar
+        $bfchar
+        endbfchar
+        endcmap
+        CMapName currentdict /CMap defineresource pop
+        end
+        end
+        """.trimIndent()
 
     private fun <T> open(name: String, block: (PDDocument) -> T): T =
         PDDocument.load(MyanmarFixtures.pdf(name, temp.root)).use(block)

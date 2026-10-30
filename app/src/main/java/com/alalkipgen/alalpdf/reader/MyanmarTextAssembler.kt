@@ -11,6 +11,7 @@ import kotlin.math.min
  * the text runs left to right (PDFBox "DirAdj" values). Every glyph of one
  * /ActualText span has the same [spanId] and carries the span's ActualText as
  * [text]. [direction] is the text direction in degrees (0, 90, 180, 270).
+ * [font] is the glyph's font outside /ActualText, if known.
  */
 internal data class GlyphItem(
     val text: String,
@@ -22,6 +23,7 @@ internal data class GlyphItem(
     val fontSize: Float,
     val spanId: Int?,
     val direction: Int = 0,
+    val font: GlyphFont? = null,
 )
 
 /**
@@ -106,7 +108,11 @@ internal data class AssembledPageText(val text: String, val runs: List<PdfTextRu
  *    is cut into syllables, each written in logical order
  *    ([MyanmarReorder]), and every syllable becomes one item whose box is
  *    the union of its glyph boxes, like an ActualText span. ActualText
- *    spans are never part of a syllable.
+ *    spans are never part of a syllable. Two kinds of run keep their glyph
+ *    texts in content order: glyphs of a Zawgyi font, and a run that is in
+ *    logical order already ([MyanmarReorder.isLogicalOrder]) unless its
+ *    font has a broken ToUnicode, which Word always writes shaped (both
+ *    kinds of font: [MyanmarGlyphText]).
  * 4. A cluster is an ActualText span, a syllable or another base item plus
  *    the combining marks (Mn/Mc) that follow it. Clusters are stable-sorted
  *    by left x; marks are never sorted or split on their own.
@@ -131,9 +137,10 @@ internal object MyanmarTextAssembler {
         items: List<GlyphItem>,
         frame: PageFrame,
         normalize: (String) -> String = { it },
+        keptInLogicalOrder: (String) -> Unit = {},
     ): AssembledPageText {
         val lines = splitLines(mergeSpans(items.mapNotNull(::printable)))
-            .map { line -> buildPieces(dropDuplicates(clusters(syllables(line)))) }
+            .map { line -> buildPieces(dropDuplicates(clusters(syllables(line, keptInLogicalOrder)))) }
             .map { pieces -> trim(collapseSpaces(normalizePieces(pieces, normalize))) }
             .filter { it.isNotEmpty() }
         val runs = ArrayList<PdfTextRun>()
@@ -197,25 +204,37 @@ internal object MyanmarTextAssembler {
 
     /**
      * Rule 3: one atom per syllable of each run of Myanmar glyphs outside
-     * /ActualText, with the syllable's text in logical order.
+     * /ActualText, with the syllable's text in logical order. The glyphs of
+     * a run are all in broken fonts or all in other fonts; a run of other
+     * fonts that is in logical order already is kept as it is and passed to
+     * [keptInLogicalOrder].
      */
-    private fun syllables(line: List<Atom>): List<Atom> {
-        if (line.none { it.isMyanmarGlyph }) return line
+    private fun syllables(line: List<Atom>, keptInLogicalOrder: (String) -> Unit): List<Atom> {
+        if (line.none { it.isUnicodeMyanmarGlyph }) return line
         val atoms = ArrayList<Atom>(line.size)
         var start = 0
         while (start < line.size) {
-            if (!line[start].isMyanmarGlyph) {
-                atoms += line[start++]
+            val head = line[start]
+            if (!head.isUnicodeMyanmarGlyph) {
+                atoms += head
+                start++
                 continue
             }
-            var end = start
-            while (end < line.size && line[end].isMyanmarGlyph) end++
+            val broken = head.brokenToUnicode
+            var end = start + 1
+            while (end < line.size && line[end].isUnicodeMyanmarGlyph && line[end].brokenToUnicode == broken) end++
             val run = line.subList(start, end)
-            MyanmarReorder.syllables(run.map { it.text }).mapTo(atoms) { syllable ->
+            val texts = run.map { it.text }
+            start = end
+            if (!broken && MyanmarReorder.isLogicalOrder(texts)) {
+                atoms += run
+                keptInLogicalOrder(texts.joinToString(""))
+                continue
+            }
+            MyanmarReorder.syllables(texts).mapTo(atoms) { syllable ->
                 val glyphs = run.subList(syllable.first, syllable.last + 1)
                 if (glyphs.size == 1 && glyphs[0].text == syllable.text) glyphs[0] else Atom.union(syllable.text, glyphs)
             }
-            start = end
         }
         return atoms
     }
@@ -381,17 +400,22 @@ internal object MyanmarTextAssembler {
         var right: Float,
         var top: Float,
         var bottom: Float,
+        val zawgyi: Boolean = false,
+        val brokenToUnicode: Boolean = false,
     ) {
         constructor(item: GlyphItem) : this(
             item.text, item.spanId, item.baselineY, item.fontSize, item.direction,
             item.left, item.right, item.top, item.bottom,
+            zawgyi = item.font?.zawgyi == true,
+            brokenToUnicode = item.font?.brokenToUnicode == true,
         )
 
         val isBlank = text.isBlank()
         val startsWithMark = startsWithMark(text)
 
-        /** A glyph outside /ActualText whose text starts with a Myanmar character. */
-        val isMyanmarGlyph = spanId == null && text.isNotEmpty() && text[0] in MYANMAR_FIRST..MYANMAR_LAST
+        /** A glyph outside /ActualText whose text starts with a Myanmar character, in a font that is not Zawgyi. */
+        val isUnicodeMyanmarGlyph =
+            spanId == null && !zawgyi && text.isNotEmpty() && text[0] in MYANMAR_FIRST..MYANMAR_LAST
 
         companion object {
             /** One atom with [text] for [atoms] of one line: the union of their boxes. */
@@ -407,6 +431,7 @@ internal object MyanmarTextAssembler {
                     right = atoms.maxOf { it.right },
                     top = atoms.minOf { it.top },
                     bottom = atoms.maxOf { it.bottom },
+                    brokenToUnicode = first.brokenToUnicode,
                 )
             }
         }

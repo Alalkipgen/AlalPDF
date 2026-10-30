@@ -2,6 +2,8 @@ package com.alalkipgen.alalpdf.reader
 
 import com.alalkipgen.alalpdf.reader.MyanmarReorder.Syllable
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MyanmarReorderTest {
@@ -15,6 +17,21 @@ class MyanmarReorderTest {
         val failures = rows.filter { (expected, glyphs) -> MyanmarReorder.reorder(glyphs) != expected }
             .map { (expected, glyphs) -> "$expected <- ${glyphs.joinToString("|")}: ${MyanmarReorder.reorder(glyphs)}" }
         assertEquals(emptyList<String>(), failures)
+        // Visual order never looks like logical order.
+        val logical = rows.filter { (_, glyphs) -> MyanmarReorder.isLogicalOrder(glyphs) }.map { it.first }
+        assertEquals(emptyList<String>(), logical)
+    }
+
+    @Test
+    fun logicalOrderHasAMarkRightAfterAPreBaseGlyph() {
+        assertTrue(MyanmarReorder.isLogicalOrder(listOf("က", "ေ", "ာ")))
+        assertTrue(MyanmarReorder.isLogicalOrder(listOf("က", "ြ", "", "ီ", "း")))
+        assertTrue(MyanmarReorder.isLogicalOrder(listOf("A", "မ", "ြ", "ေ", "ာ", "က", "်")))
+        // In visual order ေ and ြ come before their base; kinzi starts with a base.
+        assertFalse(MyanmarReorder.isLogicalOrder(listOf("ေ", "က", "ာ")))
+        assertFalse(MyanmarReorder.isLogicalOrder(listOf("ေ", "ြ", "", "က", "ာ")))
+        assertFalse(MyanmarReorder.isLogicalOrder(listOf("ေ", "င်္")))
+        assertFalse(MyanmarReorder.isLogicalOrder(listOf("ေ", "A", "ာ")))
     }
 
     @Test
