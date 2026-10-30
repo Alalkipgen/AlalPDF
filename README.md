@@ -37,11 +37,14 @@ Room schema version 1 stores recent documents, progress, and bookmarks. Legacy p
 
 Documents are opened from user-selected URIs. PDF files, reading history, and bookmarks remain on the device; the app does not upload them and has no network requirement. Android backup is enabled in the manifest, so users requiring device-local-only storage should disable app backup in system settings.
 
+Whiteout only hides text visually; the original text stays in the file and can still be copied or extracted.
+
 ## Known limitations
 
 - Corrupted or password-protected PDFs may fail because Android `PdfRenderer` has no password-entry API.
 - Large pages can use substantial memory; device memory affects rendering speed.
-- Cloud sync, annotations, text search, and OCR are not included.
+- Cloud sync, annotations, and OCR are not included.
+- Myanmar text: copy and search are correct for Unicode PDFs with ToUnicode/ActualText (tested with Google Docs, Chrome and LibreOffice exports). Not supported yet: scanned PDFs (OCR planned) and legacy Zawgyi/non-Unicode font PDFs.
 - Instrumented tests require an Android device or emulator.
 
 ## Third-party dependencies and licenses
