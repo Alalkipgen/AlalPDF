@@ -16,7 +16,7 @@ if (requireReleaseSigning && !hasReleaseCredentials) {
 }
 
 android { namespace = "com.alalkipgen.alalpdf"; compileSdk = 35
-    defaultConfig { applicationId = "com.alalkipgen.alalpdf"; minSdk = 26; targetSdk = 35; versionCode = 16; versionName = "0.3.8-beta"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    defaultConfig { applicationId = "com.alalkipgen.alalpdf"; minSdk = 26; targetSdk = 35; versionCode = 17; versionName = "0.4.0-beta"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

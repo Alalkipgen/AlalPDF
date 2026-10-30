@@ -1,32 +1,31 @@
-# PDF Reader v0.3.7-beta
+# PDF Reader v0.4.0-beta
 
-## Performance and stability
+## Burmese (Myanmar) text
 
-- Fixed library-scroll memory growth by replacing the 48-entry PDF thumbnail
-  cache with a byte-bounded 4–12 MiB LRU cache.
-- First-page previews now render at their actual on-screen size and are retained
-  as RGB_565, substantially reducing per-row bitmap memory.
-- Native thumbnail rendering is limited to two jobs and pauses during active
-  flings, preventing background PDF work from competing with scroll frames.
-- Thumbnail memory is trimmed when Android reports low-memory or background
-  pressure, and an allocation failure now falls back to the placeholder instead
-  of terminating the app.
-- Recent-file readability checks and reader permission checks no longer block
-  the Compose main thread.
-- Library rows now provide stable keys and content types for more efficient
-  lazy-list composition reuse.
+- Copy, text selection and search now give correct Burmese text on Unicode
+  PDFs. Myanmar pages use the PDFBox text layer (glyphs and `/ActualText`).
+- Microsoft Word PDFs in Noto Sans Myanmar, whose ToUnicode map is broken, are
+  copied, selected and searched correctly: the text comes from the embedded
+  font and a bundled glyph map, and glyphs drawn in visual order are put back
+  into logical order.
+- Zawgyi PDFs are copied as Zawgyi, with no conversion to Unicode. Burmese text
+  that is already in logical order is kept as extracted.
 
-## Haptics
+## Other fixes
 
-- Replaced heavy long-press vibration on normal taps, toggles and scrollbar
-  gestures with semantic system haptics.
-- Added consistent light feedback to library filters, file actions and create
-  actions while respecting the device's touch-feedback setting.
+- The reader shares one file-backed PDFBox document per session.
+- PDFium text reads each character by the index of its box.
+- The whiteout tool warns that the original text stays in the file.
+
+## Known limitations
+
+- Word PDFs in Myanmar Text, Pyidaungsu or Padauk still have about 5 % wrong
+  characters in copy and search, until those fonts are added to the glyph map.
+- Scanned PDFs have no text to copy or search (no OCR yet).
 
 ## Version
 
-- Version name: `0.3.7-beta`
-- Version code: `15`
+- Version name: `0.4.0-beta`
+- Version code: `17`
 - Minimum Android: Android 8.0 (API 26)
-
-PDF Reader works offline and does not request the Android `INTERNET` permission.
+- Signed with the same permanent key, so it installs over earlier versions.
