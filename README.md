@@ -16,7 +16,7 @@ Screenshots will be added after release-candidate device validation. The release
 
 ## Requirements and build
 
-Android Studio with SDK 35, JDK 17, and Android API 26 or newer are required. Application ID: `com.alalkipgen.alalpdf`; version: `0.1.0-beta`.
+Android Studio with SDK 35, JDK 17, and Android API 26 or newer are required. Application ID: `com.alalkipgen.alalpdf`; version: `0.4.0`.
 
 ```bash
 ./gradlew assembleDebug

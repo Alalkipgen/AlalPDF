@@ -1,4 +1,4 @@
-# PDF Reader v0.4.0-beta
+# PDF Reader v0.4.0
 
 ## Burmese (Myanmar) text
 
@@ -25,7 +25,9 @@
 
 ## Version
 
-- Version name: `0.4.0-beta`
+- Version name: `0.4.0`
 - Version code: `17`
 - Minimum Android: Android 8.0 (API 26)
 - Signed with the same permanent key, so it installs over earlier versions.
+
+PDF Reader works offline and does not request the Android `INTERNET` permission.
